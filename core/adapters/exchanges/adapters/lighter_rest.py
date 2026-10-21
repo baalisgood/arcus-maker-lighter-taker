@@ -67,7 +67,7 @@ import inspect
 import time
 from collections import OrderedDict
 from copy import deepcopy
-from ..order_state import OrderStateUnknownError,OrderAdmissionDeferredError
+from ..order_state import OrderStateUnknownError,OrderAdmissionDeferredError,OrderSendRejectedError
 
 from ..utils.logger_factory import get_exchange_logger
 
@@ -1011,17 +1011,52 @@ class LighterRest(LighterBase):
             self._uncertain_orders[str(client_id)] = {"api_key_index": key, "nonce": nonce}
             if is_cancel:
                 self._uncertain_orders[str(client_id)]["cancel_pending"] = True
+            self.last_send_error = None
             try:
                 response = await self.signer_client.send_tx(tx_type=tx_type, tx_info=tx_info)
-                if (getattr(response, "code", None) != 200
-                        or not getattr(response, "tx_hash", None)
-                        or (signed_hash and response.tx_hash != signed_hash)):
-                    raise OrderStateUnknownError("lighter", client_id=str(client_id))
-                if str(client_id) in self._uncertain_orders:
-                    self._uncertain_orders[str(client_id)]["state"] = "acknowledged"
-                return response
-            except BaseException as exc:
+            except asyncio.CancelledError as exc:
                 raise OrderStateUnknownError("lighter", client_id=str(client_id)) from exc
+            except BaseException as exc:
+                status = getattr(exc, "status", None)
+                detail = {"client": str(client_id), "nonce": nonce, "api_key_index": key,
+                          "error_type": type(exc).__name__, "status": status,
+                          "body": str(getattr(exc, "body", None) or exc)[:500]}
+                self.last_send_error = detail
+                logger.error(f"[Lighter] send_tx failed: {detail}")
+                if isinstance(status, int) and 400 <= status < 500 and status != 429:
+                    await self._release_rejected_nonce(key, str(client_id))
+                    raise OrderSendRejectedError("lighter", detail) from exc
+                raise OrderStateUnknownError("lighter", client_id=str(client_id)) from exc
+            code = getattr(response, "code", None)
+            tx_hash = getattr(response, "tx_hash", None)
+            if code != 200 or not tx_hash or (signed_hash and tx_hash != signed_hash):
+                detail = {"client": str(client_id), "nonce": nonce, "api_key_index": key, "code": code,
+                          "message": str(getattr(response, "message", ""))[:500], "tx_hash": tx_hash}
+                self.last_send_error = detail
+                logger.error(f"[Lighter] send_tx not accepted: {detail}")
+                if isinstance(code, int) and code != 200 and not tx_hash:
+                    await self._release_rejected_nonce(key, str(client_id))
+                    raise OrderSendRejectedError("lighter", detail)
+                raise OrderStateUnknownError("lighter", client_id=str(client_id))
+            if str(client_id) in self._uncertain_orders:
+                self._uncertain_orders[str(client_id)]["state"] = "acknowledged"
+            return response
+
+    async def _release_rejected_nonce(self, key, client_id):
+        """Explicit API rejection: the write was never admitted. Resync the nonce from the venue
+        (another process on the same API key, or a stale local counter, is the usual cause)."""
+        self._uncertain_orders.pop(client_id, None)
+        manager = getattr(self.signer_client, "nonce_manager", None)
+        try:
+            refresh = getattr(manager, "async_hard_refresh_nonce", None)
+            if refresh is not None:
+                await refresh(key)
+            else:
+                manager.acknowledge_failure(key)
+        except Exception as exc:
+            # Unknown nonce position: refuse further writes on this generation.
+            self._retired = True
+            logger.error(f"[Lighter] nonce resync failed after rejection: {type(exc).__name__}")
 
     async def _call_sdk_write(self, method_name, **params):
         """Keep SDK convenience writes on the same owner until their send completes."""

@@ -1,5 +1,11 @@
 # Change list
 
+## Lighter send rejection handling and terminal monitor
+
+- `send_tx` HTTP 4xx (except 429) and non-200 response codes without a tx hash are now definitive rejections (`OrderSendRejectedError`): the nonce is released and hard-refreshed from the exchange (key retired if refresh fails), a `lighter_send_rejected` event records status/body/nonce/key, and the engine retries the hedge under `max_retries` instead of halting as UNKNOWN.
+- Ambiguous send failures still halt as UNKNOWN but now record a `lighter_send_error` event with the underlying error.
+- Add `tools/monitor.py`: read-only rich terminal dashboard (positions, net exposure, resting makers, pending/unresolved hedges, 24h fills/hedges, latency p50, daily statistics, recent events, halt/manual-intervention banner).
+
 ## Unknown hedge recovery and diagnostics
 
 - Add `tools/operator_resolve_hedge.py`: read-only dry run by default; with `--confirm` it closes a single unresolved Lighter hedge attempt only when live positions prove its fill amount (Arcus equals ledger, Lighter differs by 0..remaining in hedge direction, no open Lighter order, attempt older than 120s). Remaining exposure is re-hedged by normal recovery on next start.

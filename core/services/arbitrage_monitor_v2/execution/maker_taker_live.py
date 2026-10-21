@@ -11,7 +11,7 @@ from core.adapters.exchanges.interface import ExchangeConfig
 from core.adapters.exchanges.models import ExchangeType,OrderSide,OrderType,PositionSide
 from core.adapters.exchanges.adapters.arcus import ArcusAdapter,ArcusRequestRejectedError
 from core.adapters.exchanges.adapters.lighter import LighterAdapter
-from core.adapters.exchanges.order_state import OrderStateUnknownError,OrderAdmissionDeferredError
+from core.adapters.exchanges.order_state import OrderStateUnknownError,OrderAdmissionDeferredError,OrderSendRejectedError
 from .maker_taker_engine import OrderObservation,DefinitiveFailure,DeferredHedge
 
 from .maker_taker_quotes import hedge_quantity,lighter_ioc_price
@@ -254,6 +254,16 @@ class LiveTransport:
         except OrderAdmissionDeferredError as exc:
             self.writes.remove(stamp)
             raise DeferredHedge('Hedge admission changed before signing; nothing sent') from exc
+        except OrderSendRejectedError as exc:
+            self.journal.event(obligation['symbol'],'lighter_send_rejected',client=attempt['client'],**{
+                k:v for k,v in exc.detail.items() if k!='client'})
+            raise DefinitiveFailure('Lighter API explicitly rejected hedge: '+str(exc.detail.get('body') or exc.detail.get('message'))[:200]) from exc
+        except OrderStateUnknownError:
+            detail=getattr(rest,'last_send_error',None)
+            if detail:
+                self.journal.event(obligation['symbol'],'lighter_send_error',client=attempt['client'],**{
+                    k:v for k,v in detail.items() if k!='client'})
+            raise
         return await self._terminal_lighter(attempt,obligation)
 
     async def lookup_attempt(self,attempt,obligation):
