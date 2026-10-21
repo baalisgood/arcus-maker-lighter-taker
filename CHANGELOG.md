@@ -1,5 +1,12 @@
 # Change list
 
+## v17 — Cancel no longer races an in-flight placement (cause of the 17:34 and 18:03 halts)
+
+- Evidence (`inspect_arcus_order.py`): amlt-10493 (SOL open SELL) and amlt-9307 (ETH open BUY) were both canceled ~0.2s after `maker_prepared`, while their placeOrder call was still in flight. amlt-10493 had no exchange id yet; Arcus then rejected the placement (ledger `rejected`, no fills, nothing on Arcus). The cancel (opposite-side cancel after a fill, or pause cancel) looked up an order that did not exist yet and halted with `CRITICAL cancellation unresolved: OrderStateUnknownError`. This cancel path exists since the initial release; it is a timing race, not an Arcus data problem.
+- `place` registers the placement in `engine.placing` and resolves it (with the placement observation) as soon as the Arcus call returns, before any halt/cancel_all. `cancel_one` for a client still being placed waits for that result (up to request_timeout+1s), then: rejected/deferred → nothing to cancel; unknown → the placement path already halted; open → cancels using the exchange id from the placement result.
+- `tools/inspect_arcus_order.py`: fixed UnboundLocalError when the ledger has no exchange id.
+- Tests: `test_cancel_of_quote_still_being_placed_waits_and_skips_rejected_placement`, `test_cancel_of_quote_still_being_placed_uses_placement_exchange_id`, `test_fill_cancel_during_rejected_placement_does_not_halt` (fails on v16).
+
 ## v16 — Zero-value REJECTED push also means "new order rejected" (real cause of the 17:34 halt)
 
 - Evidence (`inspect_arcus_order.py --order amlt-9307`): ETH open BUY maker, prepared 0.2s before the halt; ledger canceled/0; Arcus `GET /v1/order/0659721a80594055` is rejected (order not queryable) and there are no fills. So Arcus rejected the NEW order and announced it with the same zero-value REJECTED row used for rejected cancels. v14 ignored that row; REST cannot return a rejected order, so the order stayed unknown and the pause-cancel halted (`CRITICAL cancellation unresolved`). v15's longer wait would not have helped.

@@ -220,3 +220,62 @@ def test_rejected_new_sell_maker_observation_matches_ledger(tmp_path):
     assert obs.side==-1 and obs.status=='rejected' and str(obs.cumulative)=='0' and str(obs.requested)=='1'
     e.journal.observe_maker(client,__import__('decimal').Decimal(0),'open','O1')
     e._validate(obs,e.journal.maker(client),'arcus')
+
+
+def test_cancel_of_quote_still_being_placed_waits_and_skips_rejected_placement(tmp_path):
+    # amlt-10493: a buy fill canceled the sell quote 0.2s after prepare; Arcus then rejected that placement.
+    from decimal import Decimal
+    from test_maker_taker_engine import maker
+    async def scenario():
+        e=engine(tmp_path);client=maker(e,qty='1',side=-1)
+        calls=[]
+        async def cancel_maker(row):calls.append(row);raise AssertionError('nothing to cancel')
+        e.transport.cancel_maker=cancel_maker
+        placed=asyncio.get_running_loop().create_future();e.placing[client]=placed
+        task=asyncio.create_task(e.cancel_one(dict(e.journal.maker(client))))
+        await asyncio.sleep(.05)
+        assert not task.done()
+        e.journal.observe_maker(client,Decimal(0),'rejected');e.placing.pop(client);placed.set_result(None)
+        assert await task is True and not calls and not e.halt_reason
+    asyncio.run(scenario())
+
+
+def test_cancel_of_quote_still_being_placed_uses_placement_exchange_id(tmp_path):
+    from test_maker_taker_engine import maker, observation
+    async def scenario():
+        e=engine(tmp_path);client=maker(e,qty='1',side=-1)
+        seen=[]
+        async def cancel_maker(row):seen.append(row['exchange_id']);return observation(row,0,status='canceled')
+        e.transport.cancel_maker=cancel_maker
+        placed=asyncio.get_running_loop().create_future();e.placing[client]=placed
+        task=asyncio.create_task(e.cancel_one(dict(e.journal.maker(client))))
+        await asyncio.sleep(.05)
+        row=dict(e.journal.maker(client));e.placing.pop(client)
+        placed.set_result(observation({**row,'exchange_id':'EX-LIVE'},0,status='open'))
+        assert await task is True and seen==['EX-LIVE'] and not e.halt_reason
+    asyncio.run(scenario())
+
+
+def test_fill_cancel_during_rejected_placement_does_not_halt(tmp_path):
+    # End to end: place() is in flight when cancel_one runs; Arcus then rejects the placement.
+    from core.services.arbitrage_monitor_v2.execution.maker_taker_live import DefinitiveFailure
+    from decimal import Decimal as D
+    async def scenario():
+        from test_maker_taker_engine import profile
+        from dataclasses import replace as dc_replace
+        base=profile();cfg=dc_replace(base,hedge=dc_replace(base.hedge,request_timeout=1))
+        e=engine(tmp_path,cfg);gate=asyncio.Event();cancels=[]
+        async def maker(row):
+            await gate.wait();raise DefinitiveFailure('Arcus definitively rejected maker')
+        async def cancel_maker(row):cancels.append(row['client']);raise AssertionError('nothing rests')
+        e.transport.maker=maker;e.transport.cancel_maker=cancel_maker
+        placing=asyncio.create_task(e.place(SYMBOL,-1,'open',D(1),D('.03'),0))
+        for _ in range(50):
+            await asyncio.sleep(.01)
+            if e.placing:break
+        client=next(iter(getattr(e,"placing",None) or [r["client"] for r in e.journal.makers(active=True)]))
+        cancel=asyncio.create_task(e.cancel_one(dict(e.journal.maker(client))))
+        await asyncio.sleep(.2);assert not cancel.done();gate.set()
+        assert await placing==client and await cancel is True
+        assert not cancels and not e.halt_reason and e.journal.maker(client)['status']=='rejected' and not e.placing
+    asyncio.run(scenario())

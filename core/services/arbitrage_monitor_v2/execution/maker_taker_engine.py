@@ -95,6 +95,8 @@ class MakerTakerEngine:
         self.equity = {}
         self.tasks = []
         self.cancel_tasks=set()
+        # client -> future resolved (with the placement observation or None) when its Arcus placement call returns
+        self.placing={}
         self.hedges_inflight=set()
         self.close_tail_reasons={}
         self.requotes = defaultdict(deque)
@@ -754,6 +756,21 @@ class MakerTakerEngine:
         finally:await self.cancel_all()
 
     async def cancel_one(self, row):
+        placed=self.placing.get(row['client'])
+        if placed is not None:
+            # Seen live (amlt-9307, amlt-10493): a fill canceled the opposite quote while its placement was still
+            # in flight (no exchange id yet; Arcus then rejected it). Wait for the placement result instead of
+            # looking up an order that does not exist yet.
+            try:obs=await asyncio.wait_for(asyncio.shield(placed),self.profile.hedge.request_timeout+1)
+            except Exception:obs=None
+            current=self.journal.maker(row['client'])
+            if current is not None:row=dict(current)
+            if row['status'] in TERMINAL or row['status']=='unknown':
+                return True  # rejected/deferred: nothing rests; unknown: the placement path already halted
+            if obs is not None and getattr(obs,'status',None) in TERMINAL:
+                return True  # terminal placement result is journaled by the normal receive path
+            if not row.get('exchange_id') and obs is not None and getattr(obs,'order_id',None):
+                row={**row,'exchange_id':obs.order_id}
         try:
             obs = await asyncio.wait_for(self.transport.cancel_maker(row),self.profile.hedge.request_timeout)
             await self.observe_cancel(row,obs)
@@ -974,8 +991,14 @@ class MakerTakerEngine:
                 self.close_bounds[client]=(bound,qty)
                 self.close_quote_wait(symbol,side,end_reason='prepared',client=client)
         row = self.journal.maker(client)
+        placed=asyncio.get_running_loop().create_future();self.placing[client]=placed
         try:
-            obs = await asyncio.wait_for(self.transport.maker(row),self.profile.hedge.request_timeout)
+            try:
+                obs = await asyncio.wait_for(self.transport.maker(row),self.profile.hedge.request_timeout)
+            finally:
+                # Resolve before any halt/cancel_all below so a waiting cancel never waits on itself.
+                self.placing.pop(client,None)
+                if not placed.done():placed.set_result(locals().get('obs'))
             self.receive(obs)
         except DeferredHedge:
             self.journal.observe_maker(client,D(0),'deferred')

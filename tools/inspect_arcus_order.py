@@ -58,6 +58,7 @@ async def main(argv=None):
         led = db.execute('SELECT client,symbol,side,purpose,qty,filled,status,exchange_id FROM all_orders WHERE exchange_id=? OR client=?',
                          (oid, oid)).fetchall()
         entry['ledger'] = [dict(r) for r in led]
+        exchange_id = (led[0]['exchange_id'] if led and led[0]['exchange_id'] else oid)
         keys = [oid] + [r['client'] for r in led]
         ev = db.execute('SELECT id,at,symbol,kind,payload FROM events WHERE ' + ' OR '.join(['payload LIKE ?'] * len(keys)) +
                         ' ORDER BY id DESC LIMIT 40', tuple('%' + k + '%' for k in keys)).fetchall()
@@ -68,7 +69,6 @@ async def main(argv=None):
         except Exception as exc:
             entry['arcus_order_error'] = type(exc).__name__
         symbol = led[0]['symbol'] if led else None
-        exchange_id = (led[0]['exchange_id'] if led and led[0]['exchange_id'] else oid)
         try:
             at = max([r['at'] for r in ev] or [0])
             q = {**arcus._account_query(), 'limit': 1000}
