@@ -500,7 +500,8 @@ class MakerTakerEngine:
     async def resolve_attempt(self, attempt, obligation):
         try:
             obs = await asyncio.wait_for(self.transport.lookup_attempt(attempt,obligation),
-                                         self.profile.hedge.request_timeout)
+                                         max(self.profile.hedge.request_timeout,
+                                             getattr(self.transport,'lookup_timeout',0) if attempt['venue']=='lighter' else 0))
             return await self._attempt_observation(attempt,obligation,obs)
         except Exception:
             self.journal.attempt_state(attempt['client'],'unknown')

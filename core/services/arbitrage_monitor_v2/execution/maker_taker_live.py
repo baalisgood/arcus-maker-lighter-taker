@@ -36,6 +36,9 @@ def live_credentials():
 
 
 class LiveTransport:
+    # Unknown Lighter hedges: poll active+inactive history this long before declaring UNKNOWN.
+    lookup_poll_seconds=12
+    lookup_timeout=25
     def __init__(self,source,journal,credentials):
         a,l,ai,li,ki,self.identity=credentials
         self.source,self.journal=source,journal
@@ -204,10 +207,10 @@ class LiveTransport:
         order=await self.arcus.cancel_known_order(row['exchange_id'],row['symbol'])
         return self.normalize(order,'arcus',row['symbol'],row['client'])
 
-    async def _terminal_lighter(self,attempt,obligation):
+    async def _terminal_lighter(self,attempt,obligation,seconds=3,history=False):
         rest=self.lighter._rest
         symbol=self.lighter._normalize_symbol(obligation['symbol'])
-        deadline=time.monotonic()+3
+        deadline=time.monotonic()+seconds
         next_rest=0
         while True:
             order=rest._lookup_terminal_order(attempt['client'],symbol)
@@ -219,6 +222,14 @@ class LiveTransport:
                         return self.normalize(order,'lighter',obligation['symbol'],attempt['client'])
                 except Exception:
                     pass
+                if history:
+                    # IOC orders leave the active book at once; inactive history can lag by seconds.
+                    try:
+                        order=await rest.find_order_by_client(attempt['client'],symbol)
+                        if order.status.value in ('filled','canceled','rejected','expired'):
+                            return self.normalize(order,'lighter',obligation['symbol'],attempt['client'])
+                    except Exception:
+                        pass
                 next_rest=time.monotonic()+2
             if time.monotonic()>=deadline: raise OrderStateUnknownError('lighter',client_id=attempt['client'])
             await asyncio.sleep(.02)
@@ -282,28 +293,44 @@ class LiveTransport:
         symbol=self.lighter._normalize_symbol(obligation['symbol'])
         if attempt['client'] not in getattr(rest,'_submitted_orders',{}):
             rest._register_order_intent(attempt['client'],symbol,'sell' if obligation['side']==1 else 'buy',D(attempt['qty']))
+        await self._transaction_evidence(attempt,obligation)
         try:
-            return await self._terminal_lighter(attempt,obligation)
+            return await self._terminal_lighter(attempt,obligation,seconds=self.lookup_poll_seconds,history=True)
         except OrderStateUnknownError:
-            write=self.journal.db.execute('SELECT * FROM writes WHERE client=? ORDER BY id DESC LIMIT 1',
-                                          (attempt['client'],)).fetchone()
-            if write and write['signed_hash']:
-                try:
-                    tx=await rest.transaction_api.tx(by='hash',value=write['signed_hash'])
-                    nonce=await rest.transaction_api.next_nonce(account_index=rest.account_index,api_key_index=write['key_index'])
-                    if (tx.hash!=write['signed_hash'] or tx.account_index!=rest.account_index
-                            or tx.api_key_index!=write['key_index'] or tx.nonce!=int(write['nonce'])):
-                        raise ValueError('Transaction identity mismatch')
-                    self.journal.event(obligation['symbol'],'unknown_transaction_evidence',client=attempt['client'],
-                                       transaction_status=tx.status,next_nonce=getattr(nonce,'nonce',None),
-                                       signed_nonce=write['nonce'],key_index=write['key_index'],
-                                       event_info=str(getattr(tx,'event_info',''))[:500],
-                                       code=getattr(tx,'code',None),message=str(getattr(tx,'message',''))[:300])
-                except Exception as exc:
-                    self.journal.event(obligation['symbol'],'unknown_transaction_evidence_unavailable',client=attempt['client'],
-                                       error_type=type(exc).__name__,error=str(exc)[:300])
+            await self._transaction_evidence(attempt,obligation)
             order=await rest.find_order_by_client(attempt['client'],symbol)
             return self.normalize(order,'lighter',obligation['symbol'],attempt['client'])
+
+    async def _transaction_evidence(self,attempt,obligation):
+        """Audit-only: records what Lighter says about the signed tx; never infers fills from it."""
+        rest=self.lighter._rest
+        write=self.journal.db.execute('SELECT * FROM writes WHERE client=? ORDER BY id DESC LIMIT 1',
+                                      (attempt['client'],)).fetchone()
+        if not write:
+            self.journal.event(obligation['symbol'],'unknown_transaction_evidence_unavailable',client=attempt['client'],
+                               error_type='NoAuditedWrite',error='no writes row for client')
+            return
+        if not write['signed_hash']:
+            self.journal.event(obligation['symbol'],'unknown_transaction_evidence_unavailable',client=attempt['client'],
+                               error_type='NoSignedHash',error='writes row has no signed hash')
+            return
+        try:
+            tx=await asyncio.wait_for(rest.transaction_api.tx(by='hash',value=write['signed_hash']),3)
+            nonce=await asyncio.wait_for(rest.transaction_api.next_nonce(account_index=rest.account_index,
+                                                                          api_key_index=write['key_index']),3)
+            if (tx.hash!=write['signed_hash'] or tx.account_index!=rest.account_index
+                    or tx.api_key_index!=write['key_index'] or tx.nonce!=int(write['nonce'])):
+                raise ValueError('Transaction identity mismatch')
+            self.journal.event(obligation['symbol'],'unknown_transaction_evidence',client=attempt['client'],
+                               transaction_status=tx.status,next_nonce=getattr(nonce,'nonce',None),
+                               signed_nonce=write['nonce'],key_index=write['key_index'],
+                               signed_hash=write['signed_hash'],
+                               event_info=str(getattr(tx,'event_info',''))[:500],
+                               code=getattr(tx,'code',None),message=str(getattr(tx,'message',''))[:300])
+        except Exception as exc:
+            self.journal.event(obligation['symbol'],'unknown_transaction_evidence_unavailable',client=attempt['client'],
+                               error_type=type(exc).__name__,signed_hash=write['signed_hash'],
+                               **({'error':str(exc)[:300]} if isinstance(exc,ValueError) else {}))
 
     async def emergency(self,attempt,obligation):
         if not getattr(self,'send_guard',lambda:True)():raise DeferredHedge('Manual intervention forbids emergency order')

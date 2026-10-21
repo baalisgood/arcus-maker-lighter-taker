@@ -1,5 +1,10 @@
 # Change list
 
+## Unknown Lighter hedge: longer evidence-based lookup before halting
+- When a Lighter hedge is not terminal within 3s, recovery now polls both the active order lookup and inactive order history (`find_order_by_client`) for up to 12s (`LiveTransport.lookup_poll_seconds`); the engine allows `lookup_timeout`=25s for Lighter lookups instead of the 5s request timeout that previously cut recovery off before any history or tx evidence was read.
+- Tx evidence (`transaction_api.tx(by='hash')` + next nonce) is recorded before and after polling as `unknown_transaction_evidence` (now including `signed_hash`). Missing audit rows or hashes are logged as `unknown_transaction_evidence_unavailable` with `NoAuditedWrite` / `NoSignedHash`; non-ValueError lookup failures record only the exception type.
+- Evidence is audit-only: fills are still taken only from order observations; an order that cannot be found still halts as UNKNOWN.
+
 ## Externally closed positions
 
 - `tools/operator_resolve_hedge.py --accept-flat --confirm` resets a hedged ledger pair (net 0, no pending obligation/maker) to flat when both venues are verifiably flat (positions closed manually); dry run by default.
