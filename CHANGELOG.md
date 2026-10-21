@@ -1,5 +1,9 @@
 # Change list
 
+## Arcus clientId reuse when the ledger row has no exchange id
+- A push matched to a ledger maker only by clientId (row has no stored exchange id) is now ours only if it does not contradict the row's durable intent (symbol, side, size). Contradicting pushes are handled as foreign orders (`client_id_reused_by_foreign_order`; terminal startup snapshots → `foreign_order_ignored`) instead of halting with `Observation does not match durable intent/account`.
+- Seen live: old HYPE sell orders reusing amlt-1169 (ledger: BTC buy) and amlt-1360 (ledger: HYPE buy) halted startup.
+
 ## Unknown Lighter hedge: longer evidence-based lookup before halting
 - When a Lighter hedge is not terminal within 3s, recovery now polls both the active order lookup and inactive order history (`find_order_by_client`) for up to 12s (`LiveTransport.lookup_poll_seconds`); the engine allows `lookup_timeout`=25s for Lighter lookups instead of the 5s request timeout that previously cut recovery off before any history or tx evidence was read.
 - Tx evidence (`transaction_api.tx(by='hash')` + next nonce) is recorded before and after polling as `unknown_transaction_evidence` (now including `signed_hash`). Missing audit rows or hashes are logged as `unknown_transaction_evidence_unavailable` with `NoAuditedWrite` / `NoSignedHash`; non-ValueError lookup failures record only the exception type.

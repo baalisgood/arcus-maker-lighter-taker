@@ -88,7 +88,12 @@ def test_startup_exemption_does_not_hide_uncertain_or_conflicting_orders(tmp_pat
             # An established subscription, not an ACK, can deliver runtime data during recovery.
             live.arcus._websocket._ready.add(('orders',None))
             await live.arcus._websocket.handle_message(frame('orders',{'orders':[event]},type='channel_data'))
-        if kind in ('client_collision','id_collision'):
+        if kind=='client_collision':
+            # No exchange id is stored and the side contradicts durable intent: an old order reusing the clientId.
+            assert e.journal.db.execute("SELECT 1 FROM events WHERE kind='client_id_reused_by_foreign_order'").fetchone()
+            assert e.journal.db.execute("SELECT 1 FROM events WHERE kind='foreign_order_ignored'").fetchone()
+            assert e.queues[SYMBOL].empty() and not e.halted
+        elif kind=='id_collision':
             assert not e.journal.db.execute("SELECT 1 FROM events WHERE kind='foreign_order_ignored'").fetchone()
             obs=e.queues[SYMBOL].get_nowait()
             with pytest.raises(ValueError):await e.observe_maker(obs)

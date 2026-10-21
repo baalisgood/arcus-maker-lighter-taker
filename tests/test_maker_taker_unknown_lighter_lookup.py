@@ -28,3 +28,17 @@ def test_unknown_lighter_lookup_finds_lagging_inactive_history_and_logs_evidence
         assert kinds==['NoAuditedWrite']
         rest.transaction_api.tx.assert_not_awaited()
     asyncio.run(scenario())
+
+
+def test_clientid_reuse_without_ledger_exchange_id_is_foreign_when_intent_contradicts(tmp_path):
+    from test_maker_taker_engine import maker, observation
+    e=engine(tmp_path);client=maker(e,qty='1',side=1)
+    row=dict(e.journal.maker(client));assert not row['exchange_id']
+    before=e.sequence
+    e.receive(observation({**row,'exchange_id':'OLD-1'},'1',status='filled',side=-1))
+    assert e.sequence==before and e.halt_reason  # foreign non-snapshot fill still halts, but is not adopted
+    kinds=[k for (k,) in e.journal.db.execute("SELECT kind FROM events").fetchall()]
+    assert 'client_id_reused_by_foreign_order' in kinds and 'observation_mismatch' not in kinds
+    e2=engine(tmp_path/'b');c2=maker(e2,qty='1',side=1);r2=dict(e2.journal.maker(c2))
+    e2.receive(observation({**r2,'exchange_id':'NEW-1'},'0',status='open'))
+    assert e2.sequence==1 and not e2.halt_reason

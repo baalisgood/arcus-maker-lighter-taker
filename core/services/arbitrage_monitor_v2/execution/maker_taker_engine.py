@@ -199,16 +199,29 @@ class MakerTakerEngine:
         self.alarm(reason,symbol)
         for key in list(self.close_waits):self.close_quote_wait(*key,end_reason='halted')
 
+    def _contradicts_intent(self,observation,row):
+        if observation.symbol in self.queues and observation.symbol!=row['symbol']:return True
+        if observation.side is not None and observation.side!=row['side']:return True
+        if observation.requested is not None and observation.requested!=D(row['qty']):return True
+        return False
+
     def receive(self, observation):
         """Socket callback: immutable copy already normalized; no network/hedge awaits."""
         # A clientId match is ours only when the exchange order id agrees (or is not yet known): Arcus history can
         # retain an older order reusing the same amlt-N clientId (e.g. from a previous/reset ledger on this account).
         known=self.journal.db.execute(
-            "SELECT 1 FROM all_orders WHERE exchange_id=? OR (client=? AND (exchange_id IS NULL OR exchange_id='' OR ?='')) "
+            "SELECT 1 FROM all_orders WHERE exchange_id=? "
             "UNION ALL SELECT 1 FROM all_attempts WHERE (venue='arcus' AND exchange_id=?) OR "
             "(client=? AND (venue!='arcus' OR exchange_id IS NULL OR exchange_id='' OR ?='')) LIMIT 1",
-            (observation.order_id,observation.client,observation.order_id,
-             observation.order_id,observation.client,observation.order_id)).fetchone()
+            (observation.order_id,observation.order_id,observation.client,observation.order_id)).fetchone()
+        if not known and observation.client:
+            # Without a stored exchange id only the clientId links the push to a ledger row; an old order reusing the
+            # clientId is recognised by contradicting the row's durable intent (symbol/side/size).
+            for row in self.journal.db.execute(
+                    "SELECT symbol,side,qty FROM all_orders WHERE client=? AND (exchange_id IS NULL OR exchange_id='' OR ?='')",
+                    (observation.client,observation.order_id or '')):
+                if not self._contradicts_intent(observation,row):
+                    known=True;break
         if not known and observation.client:
             reused=self.journal.db.execute('SELECT client,exchange_id FROM all_orders WHERE client=? LIMIT 1',(observation.client,)).fetchone()
             if reused is not None:
