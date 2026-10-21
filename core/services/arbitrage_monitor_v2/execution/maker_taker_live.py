@@ -13,6 +13,7 @@ from core.adapters.exchanges.adapters.arcus import ArcusAdapter,ArcusRequestReje
 from core.adapters.exchanges.adapters.lighter import LighterAdapter
 from core.adapters.exchanges.order_state import OrderStateUnknownError,OrderAdmissionDeferredError,OrderSendRejectedError
 from .maker_taker_engine import OrderObservation,DefinitiveFailure,DeferredHedge
+from .maker_taker_journal import TERMINAL
 
 from .maker_taker_quotes import hedge_quantity,lighter_ioc_price
 
@@ -217,7 +218,9 @@ class LiveTransport:
         next_rest=0
         while True:
             order=rest._lookup_terminal_order(attempt['client'],symbol)
-            if order is not None: return self.normalize(order,'lighter',obligation['symbol'],attempt['client'])
+            if order is not None:
+                rest._uncertain_orders.pop(str(attempt['client']),None)
+                return self.normalize(order,'lighter',obligation['symbol'],attempt['client'])
             if time.monotonic()>=next_rest:
                 try:
                     order=await rest.get_order(attempt.get('exchange_id') or attempt['client'],symbol)
@@ -230,6 +233,7 @@ class LiveTransport:
                     try:
                         order=await rest.find_order_by_client(attempt['client'],symbol)
                         if order.status.value in ('filled','canceled','rejected','expired'):
+                            rest._uncertain_orders.pop(str(attempt['client']),None)
                             return self.normalize(order,'lighter',obligation['symbol'],attempt['client'])
                     except Exception:
                         pass
@@ -269,6 +273,7 @@ class LiveTransport:
                 and current is not None and current.generation==book.generation
                 and lighter_ioc_price(side,current.bid,current.ask,l['supported_price_decimals'])==native['price']
                 and hedge_quantity(qty,self.source.rules[obligation['symbol']],current.ask if side==1 else current.bid)==qty)
+        self._clear_settled_uncertain(obligation['symbol'])
         stamp=time.monotonic();self.writes.append(stamp)
         try:await rest._strict_submit(rest.signer_client.sign_create_order,native,attempt['client'],pre_sign_guard=admitted)
         except OrderAdmissionDeferredError as exc:
@@ -278,13 +283,47 @@ class LiveTransport:
             self.journal.event(obligation['symbol'],'lighter_send_rejected',client=attempt['client'],**{
                 k:v for k,v in exc.detail.items() if k!='client'})
             raise DefinitiveFailure('Lighter API explicitly rejected hedge: '+str(exc.detail.get('body') or exc.detail.get('message'))[:200]) from exc
-        except OrderStateUnknownError:
+        except OrderStateUnknownError as exc:
+            if not self._audited(attempt['client']):
+                self._not_sent(attempt,obligation,exc)
+                raise DefinitiveFailure('Lighter hedge not sent (blocked before signing)') from exc
             detail=getattr(rest,'last_send_error',None)
             if detail:
                 self.journal.event(obligation['symbol'],'lighter_send_error',client=attempt['client'],**{
                     k:v for k,v in detail.items() if k!='client'})
             raise
+        except Exception as exc:
+            # Nonce fetch, signing or audit failures happen before the audited send; nothing reached Lighter.
+            if not self._audited(attempt['client']):
+                self._not_sent(attempt,obligation,exc)
+                raise DefinitiveFailure('Lighter hedge not sent (failed before signing)') from exc
+            raise
         return await self._terminal_lighter(attempt,obligation)
+
+    def _audited(self,client):
+        return self.journal.db.execute('SELECT 1 FROM writes WHERE client=? LIMIT 1',(str(client),)).fetchone() is not None
+
+    def _not_sent(self,attempt,obligation,exc):
+        try:
+            from .maker_taker_engine import worker_error_detail
+            detail=worker_error_detail(exc,None)
+        except Exception:
+            detail={'error_type':type(exc).__name__}
+        detail.pop('observation',None)
+        self.journal.event(obligation['symbol'],'lighter_hedge_not_sent',client=attempt['client'],
+                           blocking_client=getattr(exc,'client_id',None),**{k:v for k,v in detail.items() if k!='client'})
+        self._clear_settled_uncertain(obligation['symbol'])
+
+    def _clear_settled_uncertain(self,symbol='*'):
+        """Adapter write gate entries whose attempt the journal already holds terminal (e.g. resolved from
+        inactive history) would block every later hedge before signing."""
+        rest=self.lighter._rest
+        for client in list(getattr(rest,'_uncertain_orders',{})):
+            row=self.journal.db.execute('SELECT status FROM all_attempts WHERE client=? AND venue=?',
+                                        (str(client),'lighter')).fetchone()
+            if row is not None and row['status'] in TERMINAL:
+                rest._uncertain_orders.pop(client,None)
+                self.journal.event(symbol,'lighter_uncertain_cleared',client=str(client),status=row['status'])
 
     async def lookup_attempt(self,attempt,obligation):
         if attempt['venue']=='arcus':
@@ -296,12 +335,19 @@ class LiveTransport:
         symbol=self.lighter._normalize_symbol(obligation['symbol'])
         if attempt['client'] not in getattr(rest,'_submitted_orders',{}):
             rest._register_order_intent(attempt['client'],symbol,'sell' if obligation['side']==1 else 'buy',D(attempt['qty']))
+        if not self._audited(attempt['client']):
+            # The audit row is committed before send_tx under the write lock; without it nothing was sent.
+            self.journal.event(obligation['symbol'],'lighter_attempt_never_sent',client=attempt['client'])
+            return OrderObservation('lighter',self.identity,obligation['symbol'],str(attempt['client']),'',
+                                    -obligation['side'],D(attempt['qty']),D(0),'rejected','unsent_no_audit',time.monotonic())
         await self._transaction_evidence(attempt,obligation)
         try:
             return await self._terminal_lighter(attempt,obligation,seconds=self.lookup_poll_seconds,history=True)
         except OrderStateUnknownError:
             await self._transaction_evidence(attempt,obligation)
             order=await rest.find_order_by_client(attempt['client'],symbol)
+            if order.status.value in ('filled','canceled','rejected','expired'):
+                rest._uncertain_orders.pop(str(attempt['client']),None)
             return self.normalize(order,'lighter',obligation['symbol'],attempt['client'])
 
     async def _transaction_evidence(self,attempt,obligation):

@@ -1,5 +1,11 @@
 # Change list
 
+## Lighter hedges that never reached the venue no longer halt as UNKNOWN
+- Root cause of the SOL 1521 / HYPE 2658 halts (no `writes` row): the Lighter adapter keeps a write gate (`_uncertain_orders`) and refuses new orders while any entry remains. Hedges resolved through inactive history (`find_order_by_client`) never cleared their entry, so the next hedge failed with OrderStateUnknownError before signing and was then treated as UNKNOWN.
+- Terminal Lighter observations from cache, REST or inactive history now clear the gate entry; before each hedge, entries whose attempt the journal already holds terminal are cleared (`lighter_uncertain_cleared`).
+- Any hedge failure before the audited send (gate block, nonce fetch, signing, audit) is a definitive no-send: `lighter_hedge_not_sent` (error type, code frames, blocking client; no raw exception text) and a normal zero-fill retry.
+- Recovery: a Lighter attempt without an audit row is resolved as rejected/0 (`lighter_attempt_never_sent`); the audit row is committed before `send_tx` under the write lock, so its absence proves nothing was sent.
+
 ## Cancel results and startup lookups adopt ledger identity
 - `observe_cancel` and startup maker recovery now apply the same ledger adoption as live pushes before validation. A cancel can return a cached sparse or zero-size terminal Arcus row (no side/size); previously this raised ValueError and halted with `CRITICAL cancellation unresolved` (seen live: amlt-2637).
 
