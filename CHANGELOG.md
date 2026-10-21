@@ -1,5 +1,11 @@
 # Change list
 
+## Reused clientId from historical orders; Lighter trades sort
+
+- Fix startup halt `symbol: observed='BTC-USDC-PERP' ledger='HYPE-USDC-PERP'`: an Arcus history order reusing the ledger's `amlt-N` clientId (older/reset ledger on the same account) was matched by clientId alone. A clientId match is now ours only if the exchange order id agrees or is not yet known; otherwise the order is handled as foreign and a `client_id_reused_by_foreign_order` event is recorded. Maker pushes resolve the ledger row by exchange order id first.
+- Unknown observations without side/size halt as unknown instead of raising in the socket callback.
+- Lighter `/trades` uses `sort_dir=desc` (mainnet rejects `asc` with code 20001).
+
 ## Status-only Arcus pushes and worker diagnostics
 
 - Fix live halt `Fill processing failed` (HYPE): a late Arcus push for a cache-evicted order carried no side/size, and the adapter's BUY/0 defaults were validated as `side 1 vs -1, requested 0 vs qty`. Such pushes now mark side/size unknown and inherit them from the ledger row matched by exchange order id (FILLED = full ledger size); unmatched pushes still fail closed.

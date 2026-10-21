@@ -87,13 +87,13 @@ class FinanceCollector:
             except Exception:pass
             variant=0
             for _ in range(100):
-                query={'sort_by':'timestamp','sort_dir':'asc','limit':100,'authorization':rest._get_auth_token(),
+                query={'sort_by':'timestamp','sort_dir':'desc','limit':100,'authorization':rest._get_auth_token(),
                        'account_index':rest.account_index,'order_index':int(attempt['exchange_id'])}
                 if variant and market is not None:query['market_id']=market
                 if cursor:query['cursor']=cursor
                 try:response=await rest.order_api.trades(**query)
                 except Exception as exc:
-                    # Some deployments reject order_index without market_id (HTTP 400). Retry once with market scope.
+                    # Mainnet rejects sort_dir=asc (20001 invalid param); desc is accepted. Retry once with market scope on 400.
                     if variant==0 and market is not None and cursor is None:
                         variant=1;continue
                     self.journal.event(symbol,'lighter_trades_request_failed',client=client,variant=variant,

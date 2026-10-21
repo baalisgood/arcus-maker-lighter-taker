@@ -177,3 +177,17 @@ def test_margin_canceled_no_average_is_ignored_only_for_foreign_symbol(tmp_path)
         assert e.queues[SYMBOL].get_nowait() is configured
         assert configured.status=='pending' and e.sequence==1
     asyncio.run(scenario())
+
+
+def test_historical_order_reusing_ledger_client_id_is_foreign(tmp_path):
+    # Live: startup snapshot held an old BTC order whose clientId equalled the ledger's HYPE amlt-N maker.
+    async def scenario():
+        e=engine(tmp_path);a=adapter();live=bridge()
+        client=maker(e);e.journal.observe_maker(client,D(0),'open','OURS')
+        await a._websocket.subscribe_quantity_observations(lambda order:e.receive(live.normalize(order,'arcus')))
+        await a._websocket.handle_message(frame('orders',{'recentClosedOrders':[
+            foreign_row(order_id='OLD',clientId=client,status='FILLED',filled='1')]}))
+        assert not e.halt_reason and all(q.empty() for q in e.queues.values())
+        assert len(ignored(e))==1
+        assert e.journal.db.execute("SELECT 1 FROM events WHERE kind='client_id_reused_by_foreign_order'").fetchone()
+    asyncio.run(scenario())

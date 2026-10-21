@@ -201,10 +201,23 @@ class MakerTakerEngine:
 
     def receive(self, observation):
         """Socket callback: immutable copy already normalized; no network/hedge awaits."""
+        # A clientId match is ours only when the exchange order id agrees (or is not yet known): Arcus history can
+        # retain an older order reusing the same amlt-N clientId (e.g. from a previous/reset ledger on this account).
         known=self.journal.db.execute(
-            'SELECT 1 FROM all_orders WHERE client=? OR exchange_id=? UNION ALL '
-            "SELECT 1 FROM all_attempts WHERE client=? OR (venue='arcus' AND exchange_id=?) LIMIT 1",
-            (observation.client,observation.order_id,observation.client,observation.order_id)).fetchone()
+            "SELECT 1 FROM all_orders WHERE exchange_id=? OR (client=? AND (exchange_id IS NULL OR exchange_id='' OR ?='')) "
+            "UNION ALL SELECT 1 FROM all_attempts WHERE (venue='arcus' AND exchange_id=?) OR "
+            "(client=? AND (venue!='arcus' OR exchange_id IS NULL OR exchange_id='' OR ?='')) LIMIT 1",
+            (observation.order_id,observation.client,observation.order_id,
+             observation.order_id,observation.client,observation.order_id)).fetchone()
+        if not known and observation.client:
+            reused=self.journal.db.execute('SELECT client,exchange_id FROM all_orders WHERE client=? LIMIT 1',(observation.client,)).fetchone()
+            if reused is not None:
+                try:self.journal.event(observation.symbol or '*','client_id_reused_by_foreign_order',client=observation.client,
+                    ledger_order_id=reused['exchange_id'],observed_order_id=observation.order_id,status=observation.status)
+                except Exception:pass
+        if not known and any(getattr(observation,k) is None for k in ('side','requested','cumulative')):
+            self.halt('UNKNOWN_ORDER','Unknown private order observation',observation.symbol or '*')
+            return
         if not known:
             terminal=('filled','canceled','rejected','expired','margin_canceled')
             snapshot=(self._startup_window and observation.startup_snapshot and observation.venue=='arcus'
@@ -432,7 +445,8 @@ class MakerTakerEngine:
         return True
 
     async def observe_maker(self, observation):
-        row = self.journal.maker(observation.client or observation.order_id)
+        by_id=self.journal.db.execute('SELECT client FROM all_orders WHERE exchange_id=? LIMIT 1',(str(observation.order_id),)).fetchone() if observation.order_id else None
+        row = self.journal.maker(by_id['client'] if by_id else (observation.client or observation.order_id))
         self._validate(observation,row,'arcus')
         if self.block_legacy_fill(row,observation.cumulative,observation.order_id):return
         before=self.journal.inventory(row['symbol'])
