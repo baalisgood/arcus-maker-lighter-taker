@@ -106,7 +106,7 @@ def test_hedge_blocked_before_signing_is_definitive_not_unknown(tmp_path,blocker
     from collections import deque
     from test_maker_taker_sol_unlock import add_other,OTHER
     from core.adapters.exchanges.adapters.lighter_rest import LighterRest
-    from core.services.arbitrage_monitor_v2.execution.maker_taker_engine import DefinitiveFailure
+    from core.services.arbitrage_monitor_v2.execution.maker_taker_engine import DefinitiveFailure,DeferredHedge
     async def run():
         e=engine(tmp_path);add_other(e)
         rest=object.__new__(LighterRest);rest._strict_write_lock=asyncio.Lock();rest._retired=False
@@ -116,14 +116,74 @@ def test_hedge_blocked_before_signing_is_definitive_not_unknown(tmp_path,blocker
         rest.write_audit=e.journal.audit_write;rest._register_order_intent=Mock()
         rest._next_order_nonce=AsyncMock(side_effect=ConnectionError('x') if blocker=='nonce_error' else None)
         live=LiveTransport.__new__(LiveTransport);live.send_guard=lambda:True;live.writes=deque();live.journal=e.journal
+        live.gate_wait_seconds=.1
         live.lighter=NS(_rest=rest,_normalize_symbol=lambda s:s);live.private_validity=lambda:{'lighter':(True,None,None)}
         live.source=NS(markets={OTHER:({},dict(market_id=2,supported_price_decimals=3,supported_size_decimals=3))},
             rules=e.rules,books={('lighter',OTHER):e.books['lighter',OTHER]},book_validity=lambda *args:(True,None,None))
+        if blocker=='stale':
+            # Another unresolved write holds the adapter gate: defer (no retry consumed), never send.
+            with pytest.raises(DeferredHedge):
+                await live.hedge({'client':'7','qty':'.2'},{'symbol':OTHER,'side':1,'purpose':'open'})
+            send.assert_not_called()
+            ev=e.journal.db.execute("SELECT payload FROM events WHERE kind='lighter_hedge_gate_busy'").fetchone()
+            assert json.loads(ev[0])['blocking_client']=='old'
+            return
         with pytest.raises(DefinitiveFailure):
             await live.hedge({'client':'7','qty':'.2'},{'symbol':OTHER,'side':1,'purpose':'open'})
         send.assert_not_called()
         ev=e.journal.db.execute("SELECT payload FROM events WHERE kind='lighter_hedge_not_sent'").fetchone()
         p=json.loads(ev[0]);assert p['client']=='7'
-        if blocker=='stale':assert p['blocking_client']=='old'
-        else:assert p['error_type']=='ConnectionError' and 'message' not in p
+        assert p['error_type']=='ConnectionError' and 'message' not in p
+    asyncio.run(run())
+
+
+def test_hedge_waits_for_other_symbols_inflight_hedge_then_sends(tmp_path):
+    from collections import deque
+    from test_maker_taker_sol_unlock import add_other,OTHER
+    async def run():
+        e=engine(tmp_path);add_other(e)
+        gate={'2726':{}}
+        rest=NS(_uncertain_orders=gate)
+        async def submit(*a,**k):
+            assert not gate;raise RuntimeError('sent')
+        rest._strict_submit=submit;rest.signer_client=NS(sign_create_order=None);rest._register_order_intent=Mock()
+        live=LiveTransport.__new__(LiveTransport);live.send_guard=lambda:True;live.writes=deque();live.journal=e.journal
+        live.lighter=NS(_rest=rest,_normalize_symbol=lambda s:s);live.private_validity=lambda:{'lighter':(True,None,None)}
+        live.source=NS(markets={OTHER:({},dict(market_id=2,supported_price_decimals=3,supported_size_decimals=3))},
+            rules=e.rules,books={('lighter',OTHER):e.books['lighter',OTHER]},book_validity=lambda *args:(True,None,None))
+        async def other_finishes():
+            await asyncio.sleep(.2);gate.pop('2726')
+        asyncio.create_task(other_finishes())
+        e.journal.db.execute("INSERT INTO writes(client,signed_hash,nonce,key_index,kind,at) VALUES('7','h','1',2,'14',0)")
+        with pytest.raises(RuntimeError,match='sent'):
+            await live.hedge({'client':'7','qty':'.2'},{'symbol':OTHER,'side':1,'purpose':'open'})
+        assert not e.journal.db.execute("SELECT 1 FROM events WHERE kind IN ('lighter_hedge_gate_busy','lighter_hedge_not_sent')").fetchone()
+    asyncio.run(run())
+
+
+def test_operator_release_retry_exhausted_resets_retry_budget(tmp_path):
+    from decimal import Decimal
+    from test_maker_taker_engine import maker
+    e=engine(tmp_path);client=maker(e,qty='1',side=1)
+    e.journal.observe_maker(client,Decimal(1),'filled','EX-R')
+    oid=e.journal.obligations()[0]['id']
+    for _ in range(e.profile.hedge.max_retries+1):
+        c=e.journal.prepare_attempt(oid,Decimal(1));e.journal.observe_attempt(c,Decimal(0),'canceled')
+    assert len(e.zero_fill_failures(oid))>e.profile.hedge.max_retries
+    snap={'failure_symbol':SYMBOL,'reason_code':'retry_exhausted'}
+    e.journal.latch_manual_intervention(snap)
+    e.journal.operator_release_retry_exhausted(snap,[oid])
+    assert e.journal.manual_intervention() is None and e.zero_fill_failures(oid)==[]
+    assert e.journal.db.execute("SELECT 1 FROM events WHERE kind='operator_release_retry_exhausted'").fetchone()
+
+
+def test_redrain_later_retries_symbol_under_lock(tmp_path):
+    async def run():
+        e=engine(tmp_path);calls=[]
+        async def drain(symbol):
+            assert e.symbol_locks[symbol].locked();calls.append(symbol)
+        e.drain_symbol=drain
+        e._redrain_later(SYMBOL,delay=0)
+        await asyncio.sleep(.05)
+        assert calls==[SYMBOL] and not e.halted
     asyncio.run(run())

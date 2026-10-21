@@ -77,6 +77,9 @@ async def main(argv=None):
     p.add_argument('--accept-flat', action='store_true',
                    help='a hedged ledger pair (net 0) whose positions were closed outside the runner (both venues flat) '
                         'is reset to flat; requires --confirm to write')
+    p.add_argument('--release-retry-exhausted', action='store_true',
+                   help='release a retry_exhausted manual-intervention latch so the runner re-hedges the residual; '
+                        'requires every symbol ledger == actual, no active attempts/makers; requires --confirm to write')
     args = p.parse_args(argv)
 
     from run_maker_taker import ProcessLock, account_lock_paths, load_live_env
@@ -184,11 +187,43 @@ async def main(argv=None):
                 except ValueError as exc:
                     entry['action'] = 'refused'
                     entry['reason'] = str(exc)
+            latch = report.get('manual_intervention')
+            if args.release_retry_exhausted:
+                release = report['release_retry_exhausted'] = {}
+                try:
+                    if not latch:
+                        raise ValueError('No manual-intervention latch present')
+                    if latch.get('reason_code') != 'retry_exhausted':
+                        raise ValueError(f"Latch reason_code {latch.get('reason_code')!r} is not retry_exhausted")
+                    for symbol, entry in report['symbols'].items():
+                        if entry['ledger'] != entry['actual'] and [D(x) for x in entry['ledger']] != [D(x) for x in entry['actual']]:
+                            raise ValueError(f'{symbol}: ledger {entry["ledger"]} != actual {entry["actual"]}')
+                        if entry['unresolved_attempts']:
+                            raise ValueError(f'{symbol}: unresolved attempts present')
+                    if journal.makers(active=True):
+                        raise ValueError('Active maker orders in ledger')
+                    symbol = latch.get('failure_symbol')
+                    native = transport.lighter._normalize_symbol(symbol)
+                    if await rest.get_open_orders(native):
+                        raise ValueError('Open Lighter orders in failure market; cancel them first')
+                    oids = [row['id'] for row in journal.obligations(symbol)]
+                    release['failure_symbol'] = symbol
+                    release['unresolved_qty'] = latch.get('unresolved_qty')
+                    release['obligations'] = oids
+                    if args.confirm:
+                        journal.operator_release_retry_exhausted(latch, oids)
+                        release['action'] = 'written (latch released; runner will re-hedge the residual after start)'
+                    else:
+                        release['action'] = 'dry_run (add --confirm to write)'
+                except ValueError as exc:
+                    release['action'] = 'refused'; release['reason'] = str(exc)
         finally:
             await transport.close()
             journal.close()
     print(json.dumps(report, indent=2, ensure_ascii=False, default=str))
-    return 0 if all(e.get('action') != 'refused' for e in report['symbols'].values()) else 3
+    refused = any(e.get('action') == 'refused' for e in report['symbols'].values())
+    refused = refused or report.get('release_retry_exhausted', {}).get('action') == 'refused'
+    return 3 if refused else 0
 
 
 if __name__ == '__main__':

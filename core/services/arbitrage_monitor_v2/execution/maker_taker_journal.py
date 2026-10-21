@@ -300,6 +300,20 @@ class Journal:
         row=self.db.execute("SELECT value FROM meta WHERE key='manual_intervention'").fetchone()
         return json.loads(row[0]) if row else None
 
+    def retry_reset_clients(self,obligation):
+        row=self.db.execute('SELECT value FROM meta WHERE key=?',('retry_reset:'+str(obligation),)).fetchone()
+        return set(json.loads(row[0])) if row else set()
+
+    def operator_release_retry_exhausted(self,snapshot,obligation_ids):
+        """Explicit operator release of a retry_exhausted latch: prior zero-fill attempts stop counting."""
+        with self.transaction():
+            for oid in obligation_ids:
+                spent=sorted(self.retry_reset_clients(oid)|{a['client'] for a in self.attempts(oid,include_deferred=False)})
+                self.db.execute('INSERT OR REPLACE INTO meta VALUES(?,?)',('retry_reset:'+str(oid),json.dumps(spent)))
+            self.db.execute("DELETE FROM meta WHERE key='manual_intervention'")
+            self.event(snapshot.get('failure_symbol') or '*','operator_release_retry_exhausted',
+                       obligations=list(obligation_ids),released_snapshot=snapshot)
+
     def latch_manual_intervention(self,snapshot):
         with self.transaction():
             existing=self.manual_intervention()

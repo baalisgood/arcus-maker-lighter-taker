@@ -538,9 +538,26 @@ class MakerTakerEngine:
         qty=hedge_quantity(remaining,self.rules[first['symbol']],price)
         return ('eligible' if qty else 'deferred_dust'),qty
 
+    def _redrain_later(self,symbol,delay=1.0):
+        """A transient no-send deferral (e.g. another market's hedge holding the Lighter write gate) is retried
+        promptly instead of waiting for the next reconcile cycle."""
+        tasks=self.__dict__.setdefault('_redrain_tasks',set())
+        async def again():
+            await asyncio.sleep(delay)
+            if self.halted or not self.sends_allowed():return
+            try:
+                async with self.symbol_locks[symbol]:await self.drain_symbol(symbol)
+            except Exception as exc:
+                try:self.journal.event(symbol,'worker_error',**worker_error_detail(exc,None))
+                except Exception:pass
+                self.halt('UNKNOWN_ORDER','Deferred hedge retry failed',symbol,error_type=type(exc).__name__)
+                await self.cancel_all()
+        task=asyncio.ensure_future(again());tasks.add(task);task.add_done_callback(tasks.discard)
+
     def zero_fill_failures(self,obligation):
+        released=self.journal.retry_reset_clients(obligation)
         return [a for a in self.journal.attempts(obligation,include_deferred=False)
-                if a['venue']=='lighter' and a['status'] in TERMINAL and D(a['filled'])==0]
+                if a['venue']=='lighter' and a['status'] in TERMINAL and D(a['filled'])==0 and a['client'] not in released]
 
     def blocking_residuals(self,symbol=None):
         return [rows for rows in self.residual_buckets(symbol) if self.residual_state(rows)[0]!='deferred_dust']
@@ -638,9 +655,10 @@ class MakerTakerEngine:
                 try:
                     obs=await asyncio.wait_for(self.transport.hedge(attempt,obligation),self.profile.hedge.request_timeout)
                     terminal=await self._attempt_observation(attempt,obligation,obs)
-                except DeferredHedge:
+                except DeferredHedge as exc:
                     self.journal.observe_attempt(client,D(0),'deferred')
                     # Durable no-send intent: excluded from retry count, retained for audit.
+                    if getattr(exc,'retry_soon',False):self._redrain_later(symbol)
                     return
                 except DefinitiveFailure:
                     self.journal.observe_attempt(client,D(0),'rejected');terminal=True

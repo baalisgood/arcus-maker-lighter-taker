@@ -1,5 +1,10 @@
 # Change list
 
+## Lighter write gate shared across markets: wait instead of burning retries
+- Root cause of the 13:41 SOL `retry_exhausted` halt (and the earlier SOL 1521 UNKNOWN): the Lighter adapter admits one unresolved write at a time across all markets. A SOL hedge issued while a HYPE hedge (2726) was still in flight was blocked before signing; v10 counted each block as a zero-fill failure, so four retries were spent within one second.
+- `hedge` now waits up to `gate_wait_seconds` (2s) for another market's in-flight hedge to settle, clearing journal-terminal gate entries each poll. If still busy, it defers (`lighter_hedge_gate_busy`, no retry consumed, nothing sent) and the engine re-drains that symbol after 1s (`_redrain_later`) instead of waiting for the next reconcile cycle.
+- Operator: `tools/operator_resolve_hedge.py --release-retry-exhausted [--confirm]` releases a `retry_exhausted` manual-intervention latch only when every symbol's ledger equals actual positions, no attempts/makers are active and the failure market has no open Lighter orders. Prior zero-fill attempts of the residual obligations stop counting (`retry_reset:<id>` meta), the latch is removed and `operator_release_retry_exhausted` is recorded; the runner re-hedges the residual on start.
+
 ## Lighter hedges that never reached the venue no longer halt as UNKNOWN
 - Root cause of the SOL 1521 / HYPE 2658 halts (no `writes` row): the Lighter adapter keeps a write gate (`_uncertain_orders`) and refuses new orders while any entry remains. Hedges resolved through inactive history (`find_order_by_client`) never cleared their entry, so the next hedge failed with OrderStateUnknownError before signing and was then treated as UNKNOWN.
 - Terminal Lighter observations from cache, REST or inactive history now clear the gate entry; before each hedge, entries whose attempt the journal already holds terminal are cleared (`lighter_uncertain_cleared`).

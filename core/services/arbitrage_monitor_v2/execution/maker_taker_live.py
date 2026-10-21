@@ -40,6 +40,7 @@ class LiveTransport:
     # Unknown Lighter hedges: poll active+inactive history this long before declaring UNKNOWN.
     lookup_poll_seconds=12
     lookup_timeout=25
+    gate_wait_seconds=2
     def __init__(self,source,journal,credentials):
         a,l,ai,li,ki,self.identity=credentials
         self.source,self.journal=source,journal
@@ -273,7 +274,18 @@ class LiveTransport:
                 and current is not None and current.generation==book.generation
                 and lighter_ioc_price(side,current.bid,current.ask,l['supported_price_decimals'])==native['price']
                 and hedge_quantity(qty,self.source.rules[obligation['symbol']],current.ask if side==1 else current.bid)==qty)
-        self._clear_settled_uncertain(obligation['symbol'])
+        # The Lighter adapter admits one unresolved write at a time across all markets: another symbol's hedge in
+        # flight (normally <0.5s) must be waited for, not counted as this hedge's failure.
+        deadline=time.monotonic()+self.gate_wait_seconds
+        while True:
+            self._clear_settled_uncertain(obligation['symbol'])
+            if not getattr(rest,'_uncertain_orders',None):break
+            if time.monotonic()>=deadline:
+                self.journal.event(obligation['symbol'],'lighter_hedge_gate_busy',client=attempt['client'],
+                                   blocking_client=str(next(iter(rest._uncertain_orders))))
+                busy=DeferredHedge('Lighter write gate busy with another hedge; nothing sent');busy.retry_soon=True
+                raise busy
+            await asyncio.sleep(.02)
         stamp=time.monotonic();self.writes.append(stamp)
         try:await rest._strict_submit(rest.signer_client.sign_create_order,native,attempt['client'],pre_sign_guard=admitted)
         except OrderAdmissionDeferredError as exc:
