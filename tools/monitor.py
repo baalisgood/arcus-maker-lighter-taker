@@ -134,7 +134,7 @@ def build(path, stats_cache):
         if any(e['kind'].startswith(k) for k in QUIET):
             continue
         style = 'bold red' if e['kind'] in ('halt', 'manual_intervention', 'observation_mismatch', 'lighter_send_rejected',
-                                            'lighter_send_error', 'unknown_transaction_evidence') else ''
+                                            'lighter_send_error', 'unknown_transaction_evidence', 'worker_error') else ''
         ev.add_row(datetime.fromtimestamp(e['at']).strftime('%H:%M:%S'), e['symbol'].replace('-USDC-PERP', ''),
                    Text(e['kind'], style=style), e['payload'][:160])
         shown += 1

@@ -1,5 +1,11 @@
 # Change list
 
+## Status-only Arcus pushes and worker diagnostics
+
+- Fix live halt `Fill processing failed` (HYPE): a late Arcus push for a cache-evicted order carried no side/size, and the adapter's BUY/0 defaults were validated as `side 1 vs -1, requested 0 vs qty`. Such pushes now mark side/size unknown and inherit them from the ledger row matched by exchange order id (FILLED = full ledger size); unmatched pushes still fail closed.
+- Worker failures record a sanitized `worker_error` event (code frames, project ValueError message, observation fields); raw exception payloads are still never persisted.
+- Add read-only `tools/probe_lighter_trades.py` to find which Lighter `/trades` parameters this account accepts.
+
 ## Lighter send rejection handling and terminal monitor
 
 - `send_tx` HTTP 4xx (except 429) and non-200 response codes without a tx hash are now definitive rejections (`OrderSendRejectedError`): the nonce is released and hard-refreshed from the exchange (key retired if refresh fails), a `lighter_send_rejected` event records status/body/nonce/key, and the engine retries the hedge under `max_retries` instead of halting as UNKNOWN.

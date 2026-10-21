@@ -369,10 +369,10 @@ class MakerTakerEngine:
         Only fields that are empty/unresolvable are filled from the ledger row matched by exchange order id.
         Conflicting non-empty values are left untouched so _validate still fails closed."""
         if observation.venue!='arcus' or not observation.order_id:return observation
-        row=self.journal.db.execute('SELECT client,symbol,exchange_id FROM all_orders WHERE exchange_id=? LIMIT 1',
+        row=self.journal.db.execute('SELECT client,symbol,exchange_id,side,qty,filled FROM all_orders WHERE exchange_id=? LIMIT 1',
                                     (str(observation.order_id),)).fetchone()
         if row is None and observation.client:
-            row=self.journal.db.execute('SELECT client,symbol,exchange_id FROM all_orders WHERE client=? LIMIT 1',
+            row=self.journal.db.execute('SELECT client,symbol,exchange_id,side,qty,filled FROM all_orders WHERE client=? LIMIT 1',
                                         (str(observation.client),)).fetchone()
         if row is None:return observation
         changes={}
@@ -380,10 +380,16 @@ class MakerTakerEngine:
             changes['client']=row['client']
         if observation.symbol not in self.queues and row['symbol'] in self.queues:
             changes['symbol']=row['symbol']
+        if row['exchange_id'] and str(row['exchange_id'])==str(observation.order_id):
+            # Status-only pushes (no side/size) inherit intent from the ledger; FILLED means the full ledger size.
+            if observation.side is None:changes['side']=row['side']
+            if observation.requested is None:changes['requested']=D(row['qty'])
+            if observation.cumulative is None:
+                changes['cumulative']=D(row['qty']) if observation.status=='filled' else D(row['filled'])
         if not changes:return observation
         try:
             self.journal.event(row['symbol'],'observation_identity_adopted',order_id=observation.order_id,
-                               observed_client=observation.client,observed_symbol=observation.symbol,**{'adopted_'+k:v for k,v in changes.items()})
+                               observed_client=observation.client,observed_symbol=observation.symbol,**{'adopted_'+k:str(v) for k,v in changes.items()})
         except Exception:pass
         return replace(observation,**changes)
 
@@ -456,6 +462,8 @@ class MakerTakerEngine:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
+                try:self.journal.event(symbol,'worker_error',**worker_error_detail(exc,obs))
+                except Exception:pass
                 self.halt('UNKNOWN_ORDER','Fill processing failed',symbol,error_type=type(exc).__name__)
                 await self.cancel_all()
             finally:
@@ -1527,3 +1535,16 @@ class MakerTakerEngine:
                            manual_intervention_persisted=self.manual_intervention_persisted,
                            manual_intervention_snapshot=self.manual_intervention_snapshot)
         return clean
+
+
+def worker_error_detail(exc,obs):
+    """Code location of a worker failure without raw exception payloads (which may carry credentials).
+    Only ValueErrors raised by this project's maker/taker modules (fixed, ledger-derived text) keep their message."""
+    import os,traceback
+    frames=[(os.path.basename(f.filename),f.lineno,f.name) for f in traceback.extract_tb(exc.__traceback__)]
+    detail={'error_type':type(exc).__name__,'frames':[f'{n}:{l}:{fn}' for n,l,fn in frames[-8:]]}
+    if isinstance(exc,ValueError) and frames and frames[-1][0].startswith('maker_taker_'):
+        detail['message']=str(exc)[:500]
+    if obs is not None:
+        detail['observation']={k:str(getattr(obs,k,None)) for k in ('client','order_id','symbol','status','cumulative','requested')}
+    return detail

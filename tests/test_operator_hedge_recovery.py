@@ -39,8 +39,8 @@ class FakeJournal:
     def __init__(self, rows):
         import sqlite3
         self.db = sqlite3.connect(':memory:'); self.db.row_factory = sqlite3.Row
-        self.db.execute('CREATE TABLE all_orders(client,symbol,exchange_id)')
-        self.db.executemany('INSERT INTO all_orders VALUES(?,?,?)', rows)
+        self.db.execute('CREATE TABLE all_orders(client,symbol,exchange_id,side,qty,filled)')
+        self.db.executemany('INSERT INTO all_orders VALUES(?,?,?,?,?,?)', [tuple(r)+(-1,'0.098','0.098')[len(r)-3:] for r in rows])
         self.events = []
 
     def event(self, *a, **k): self.events.append((a, k))
@@ -74,3 +74,35 @@ def test_conflicting_identity_still_fails_with_detail():
     with pytest.raises(ValueError, match=r"requested: observed=Decimal\('0.196'\)"):
         e._validate(obs(requested=D('0.196'), cumulative=D('0')), row, 'arcus')
     assert e._adopt_ledger_identity(obs(client='OTHER')).client == 'OTHER'
+
+
+def test_status_only_push_inherits_side_and_size_from_ledger():
+    # Live HYPE halt: a late FILLED push for a cache-evicted order had side=BUY/size=0 adapter defaults.
+    e = engine([('C1', 'SOL-USDC-PERP', 'O1')])
+    adopted = e._adopt_ledger_identity(obs(client='', symbol='MARKET-0', side=None, requested=None, cumulative=None))
+    assert (adopted.side, adopted.requested, adopted.cumulative) == (-1, D('0.098'), D('0.098'))
+    row = {'client': 'C1', 'symbol': 'SOL-USDC-PERP', 'side': -1, 'qty': '0.098', 'exchange_id': 'O1'}
+    e._validate(adopted, row, 'arcus')
+
+
+def test_status_only_push_without_exchange_id_match_fails_closed():
+    e = engine([('C1', 'SOL-USDC-PERP', 'OTHER')])
+    adopted = e._adopt_ledger_identity(obs(side=None, requested=None, cumulative=None))
+    assert adopted.side is None
+    row = {'client': 'C1', 'symbol': 'SOL-USDC-PERP', 'side': -1, 'qty': '0.098', 'exchange_id': 'OTHER'}
+    with pytest.raises(ValueError, match='side: observed=None'):
+        e._validate(adopted, row, 'arcus')
+
+
+def test_live_normalize_marks_missing_side_and_size_unknown():
+    from core.services.arbitrage_monitor_v2.execution.maker_taker_live import LiveTransport
+    from core.adapters.exchanges.adapters.arcus import ArcusAdapter
+    parser = ArcusAdapter.__new__(ArcusAdapter); parser._markets = {}
+    parser.standard_symbol = lambda s: s or 'MARKET-0'
+    t = LiveTransport.__new__(LiveTransport); t.identity = 'acct'
+    partial = parser._parse_order({'orderId': 'O1', 'status': 'FILLED', 'avgFillPrice': '81.682'})
+    o = t.normalize(partial, 'arcus')
+    assert o.side is None and o.requested is None and o.cumulative is None and o.status == 'filled'
+    full = parser._parse_order({'orderId': 'O1', 'side': 'SELL', 'originalSize': '0.13', 'remainingSize': '0', 'status': 'FILLED'})
+    o = t.normalize(full, 'arcus')
+    assert (o.side, o.requested, o.cumulative) == (-1, D('0.13'), D('0.13'))

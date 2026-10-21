@@ -118,8 +118,14 @@ class LiveTransport:
                     reported_status=state.lower()
             except (ValueError, ArithmeticError):
                 pass
+        side=1 if order.side==OrderSide.BUY else -1
+        requested=D(order.amount);cumulative=D(order.filled)
+        if venue=='arcus' and raw:
+            # A partial push for an order no longer cached omits side/size; the adapter's BUY/0 defaults are not evidence.
+            if not any(k in raw for k in ('side','orderSide')):side=None
+            if not any(k in raw for k in ('originalSize','quantity')):requested=cumulative=None
         return OrderObservation(venue,self.identity,symbol or order.symbol,str(client or order.client_id or ''),str(order.id),
-            1 if order.side==OrderSide.BUY else -1,D(order.amount),D(order.filled),status,'validated_adapter',time.monotonic(),
+            side,requested,cumulative,status,'validated_adapter',time.monotonic(),
             sequence=str(raw.get('sequenceNumber','')),average=order.average,fee=fee,
             remaining=remaining,reported_status=reported_status,startup_snapshot=raw.get('_startup_snapshot') is True,
             startup_provisional=raw.get('_startup_provisional') is True)
