@@ -1,5 +1,11 @@
 # Change list
 
+## v15 — Fix v14 regression: cancel gave up 1s after a rejected cancel
+
+- 17:34 ETH halt `CRITICAL cancellation unresolved: amlt-9307: OrderStateUnknownError`. Before v14 the zero-value REJECTED push (cancel rejected) wrongly made the cached order terminal at once, so the cancel returned. v14 correctly ignores that push, but the cancel then only waited `reconcile_timeout` (1s) for the real FILLED/CANCELED state, which can take longer to show on WS/REST.
+- After a request-rejection push for an order, `_await_order` extends its deadline to `rejection_wait` (3s) from that push (still inside the engine's 5s cancel timeout). Without a rejection the 1s fail-closed behavior is unchanged; if no terminal state arrives in time it still halts.
+- `tools/inspect_arcus_order.py --order amlt-9307` now accepts a ledger client and queries Arcus with its exchange id.
+
 ## v14 — Root cause of the side-mismatch halts: Arcus cancel-rejection pushes
 
 - Evidence (`tools/inspect_arcus_order.py`, amlt-5937 / c556322b1878438d): Arcus REST and fills report the order as SELL, FILLED, MAKER 0.192; the ledger (-1) was right. The halting observation had `status: rejected` right after the cancel of that order: canceling an order that had just filled makes Arcus push a zero-value row (originalSize 0, marketId 0, side defaulting to BUY, REJECTED). Same shape as v8's amlt-1733. It halted only sell orders because the default side is BUY.

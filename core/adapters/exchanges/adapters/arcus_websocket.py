@@ -264,6 +264,11 @@ class ArcusWebSocket:
                     cached=self.adapter._orders.get(order_id)
                     self.adapter.logger.warning(f'Arcus request-rejection push ignored for order {order_id} '
                                                 f'(cached={cached.status.value if cached else None})')
+                    if order_id:
+                        try:self.adapter._request_rejected[order_id]=asyncio.get_running_loop().time()
+                        except RuntimeError:pass
+                        while len(self.adapter._request_rejected)>256:
+                            self.adapter._request_rejected.pop(next(iter(self.adapter._request_rejected)))
                     if order_id and (cached is None or cached.status not in (OrderStatus.FILLED,OrderStatus.CANCELED,OrderStatus.REJECTED,OrderStatus.EXPIRED)):
                         self._recover_order(order_id,cached.symbol if cached else '',
                                             startup_snapshot=message.get('type')=='subscribed')

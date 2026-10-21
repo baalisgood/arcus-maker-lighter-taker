@@ -25,7 +25,7 @@ async def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('--state-dir', type=Path, default=ROOT / 'run/maker-taker')
     p.add_argument('--env-file', type=Path)
-    p.add_argument('--order', action='append', default=[], help='Arcus order id (repeatable)')
+    p.add_argument('--order', action='append', default=[], help='Arcus order id or ledger client, e.g. amlt-9307 (repeatable)')
     p.add_argument('--last', type=int, default=2, help='inspect the last N observation_mismatch events')
     args = p.parse_args(argv)
     from run_maker_taker import load_live_env
@@ -40,7 +40,7 @@ async def main(argv=None):
     orders = list(args.order)
     mismatches = db.execute("SELECT id,at,symbol,payload FROM events WHERE kind='observation_mismatch' ORDER BY id DESC LIMIT ?",
                             (args.last,)).fetchall()
-    for m in mismatches:
+    for m in (mismatches if not args.order else []):
         oid = json.loads(m['payload']).get('order_id')
         if oid and oid not in orders: orders.append(oid)
     arcus = ArcusAdapter(ExchangeConfig('arcus', 'Arcus', ExchangeType.PERPETUAL, a['API_KEY'], '',
@@ -63,11 +63,12 @@ async def main(argv=None):
                         ' ORDER BY id DESC LIMIT 40', tuple('%' + k + '%' for k in keys)).fetchall()
         entry['events'] = [dict(id=r['id'], at=r['at'], kind=r['kind'], payload=r['payload'][:600]) for r in reversed(ev)]
         try:
-            _, data = await arcus._request('GET', f'/v1/order/{oid}', query=arcus._account_query())
+            _, data = await arcus._request('GET', f'/v1/order/{exchange_id}', query=arcus._account_query())
             entry['arcus_order'] = pick(data, ORDER_FIELDS)
         except Exception as exc:
             entry['arcus_order_error'] = type(exc).__name__
         symbol = led[0]['symbol'] if led else None
+        exchange_id = (led[0]['exchange_id'] if led and led[0]['exchange_id'] else oid)
         try:
             at = max([r['at'] for r in ev] or [0])
             q = {**arcus._account_query(), 'limit': 1000}
@@ -76,7 +77,7 @@ async def main(argv=None):
             _, data = await arcus._request('GET', '/v1/fills', query=q)
             fills = data.get('fills', []) if isinstance(data, dict) else []
             if isinstance(fills, dict): fills = list(fills.values())
-            entry['arcus_fills'] = [pick(f, FILL_FIELDS) for f in fills if str(f.get('orderId')) == str(oid)]
+            entry['arcus_fills'] = [pick(f, FILL_FIELDS) for f in fills if str(f.get('orderId')) == str(exchange_id)]
             entry['arcus_fill_keys'] = sorted({k for f in fills for k in f})[:60]
         except Exception as exc:
             entry['arcus_fills_error'] = type(exc).__name__

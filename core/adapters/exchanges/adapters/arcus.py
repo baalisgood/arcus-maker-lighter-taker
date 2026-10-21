@@ -54,6 +54,8 @@ class ArcusAdapter(ExchangeAdapter):
         self._uncertain = set()
         self._write_lock = asyncio.Lock()
         self._modify_uncertain = set()
+        # order id -> loop time of an Arcus request-rejection push (e.g. cancel of an order that just filled)
+        self._request_rejected = {}
         self._cancel_uncertain = set()
         self._last_nonce = 0
         self._websocket = ArcusWebSocket(self)
@@ -424,6 +426,11 @@ class ArcusAdapter(ExchangeAdapter):
         deadline = asyncio.get_running_loop().time() + float(self.config.extra_params.get('reconcile_timeout', 3))
         while True:
             resolved = self._clients.get(order_id, order_id)
+            rejected_at = self._request_rejected.get(resolved)
+            if rejected_at is not None:
+                # A rejected cancel means the order already ended on Arcus; give its real FILLED/CANCELED
+                # state (WS or REST) time to arrive instead of failing after reconcile_timeout.
+                deadline = max(deadline, rejected_at + float(self.config.extra_params.get('rejection_wait', 3)))
             cached = self._orders.get(resolved)
             if cached and (cached.status in TERMINAL or not terminal and cached.status == OrderStatus.OPEN):
                 return cached

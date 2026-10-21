@@ -814,3 +814,30 @@ def test_cancel_rejection_push_on_open_order_recovers_from_rest_instead_of_mergi
         await ws.handle_message(frame('orders',_rejection_push('UNKNOWN'),type='channel_data'))
         assert 'UNKNOWN' not in a._orders and recovered[-1][0]=='UNKNOWN'
     run(scenario())
+
+
+def test_cancel_waits_for_real_terminal_state_after_rejection_push():
+    a=adapter(reconcile_timeout=.2,rejection_wait=1.5); ws=a._websocket
+    a.get_order=AsyncMock(side_effect=OrderStateUnknownError('arcus'))
+    ws._recover_order=lambda *args,**kw:None
+    async def scenario():
+        await ws.handle_message(frame('orders',{'orders':[row(side='SELL',seq=5)]}))
+        async def later():
+            await ws.handle_message(frame('orders',_rejection_push(),type='channel_data'))
+            await asyncio.sleep(.6)  # longer than reconcile_timeout
+            await ws.handle_message(frame('orders',{'orders':[row(side='SELL',status='FILLED',filled='1',seq=6)]},type='channel_data'))
+        task=asyncio.create_task(later())
+        got=await a._await_order('O1',SYMBOL,terminal=True)
+        await task
+        assert got.status==OrderStatus.FILLED and got.side==OrderSide.SELL
+    run(scenario())
+
+
+def test_cancel_without_rejection_still_fails_closed_after_reconcile_timeout():
+    a=adapter(reconcile_timeout=.2); ws=a._websocket
+    a.get_order=AsyncMock(side_effect=OrderStateUnknownError('arcus'))
+    async def scenario():
+        await ws.handle_message(frame('orders',{'orders':[row(side='SELL',seq=5)]}))
+        with pytest.raises(OrderStateUnknownError):
+            await a._await_order('O1',SYMBOL,terminal=True)
+    run(scenario())
