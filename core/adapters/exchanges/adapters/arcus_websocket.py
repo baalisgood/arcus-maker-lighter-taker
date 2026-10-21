@@ -295,7 +295,10 @@ class ArcusWebSocket:
                     continue
                 cost=cached.cost+size*Decimal(str(row['price']))
                 # Only a delta consistent with the confirmed baseline yields cumulative valuation.
-                order=self.adapter._merge_order({**scoped,'filledSize':str(cumulative),
+                # A fill row describes a trade, not the order: its side may be the trade's
+                # aggressor side, so order identity (side) always stays from the order channel.
+                fill_fields={k:v for k,v in scoped.items() if k not in ('side','orderSide')}
+                order=self.adapter._merge_order({**fill_fields,'filledSize':str(cumulative),
                     'avgFillPrice':str(cost/cumulative) if cumulative else '0'})
                 if order:
                     self._quantity(order,startup_snapshot=startup_snapshot)

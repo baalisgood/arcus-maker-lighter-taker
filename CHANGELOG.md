@@ -1,5 +1,11 @@
 # Change list
 
+## v12 — Arcus fill rows no longer overwrite order side
+
+- Root cause of the 14:18 SOL halt (`observation_mismatch side: observed=1 ledger=-1`): when a `userFills` row arrived with a newer sequence than the cached order, it was merged over the order and its `side` (trade side, not order side) replaced the order's side.
+- `userFills` merge now drops `side`/`orderSide`; order side only comes from the order channel / REST. Ledger side validation is unchanged (not relaxed).
+- Test: `test_fill_row_side_never_overrides_order_side`.
+
 ## Lighter write gate shared across markets: wait instead of burning retries
 - Root cause of the 13:41 SOL `retry_exhausted` halt (and the earlier SOL 1521 UNKNOWN): the Lighter adapter admits one unresolved write at a time across all markets. A SOL hedge issued while a HYPE hedge (2726) was still in flight was blocked before signing; v10 counted each block as a zero-fill failure, so four retries were spent within one second.
 - `hedge` now waits up to `gate_wait_seconds` (2s) for another market's in-flight hedge to settle, clearing journal-terminal gate entries each poll. If still busy, it defers (`lighter_hedge_gate_busy`, no retry consumed, nothing sent) and the engine re-drains that symbol after 1s (`_redrain_later`) instead of waiting for the next reconcile cycle.

@@ -754,3 +754,15 @@ def test_strict_rest_terminal_consumes_all_submit_aliases_before_late_ws(monkeyp
         reporter.assert_not_called()
         assert e._order_fill_results['real-id'].filled == 1
     run(scenario())
+
+
+def test_fill_row_side_never_overrides_order_side():
+    a=adapter(); ws=a._websocket
+    async def scenario():
+        await ws.handle_message(frame('orders',{'orders':[row(side='SELL',seq=1)]}))
+        fill={'tradeId':'T-side','orderId':'O1','marketId':1,'marketDisplayName':'BTC-USD','side':'BUY',
+              'originalSize':'1','remainingSize':'.6','size':'.4','price':'50000','sequenceNumber':2}
+        await ws.handle_message(frame('userFills',{'fills':[fill]}))
+        o=a._orders['O1']
+        assert o.filled==D('.4') and o.side==OrderSide.SELL and o.raw_data['side']=='SELL'
+    run(scenario())
