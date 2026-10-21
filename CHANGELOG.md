@@ -1,5 +1,8 @@
 # Change list
 
+## Arcus zero-size REJECTED pushes treated as status-only
+- Seen live (amlt-1733, HYPE): a REJECTED push reported `originalSize` 0 (unresolved market `MARKET-0`), giving requested 0 / cumulative 0.13 and halting with `Fill processing failed`. A zero or negative reported size is no longer quantity evidence: requested/cumulative are dropped and the known order (matched by exchange id) inherits size and filled quantity from the ledger, like other status-only pushes. Position reconciliation still catches any real fill.
+
 ## Arcus clientId reuse when the ledger row has no exchange id
 - A push matched to a ledger maker only by clientId (row has no stored exchange id) is now ours only if it does not contradict the row's durable intent (symbol, side, size). Contradicting pushes are handled as foreign orders (`client_id_reused_by_foreign_order`; terminal startup snapshots → `foreign_order_ignored`) instead of halting with `Observation does not match durable intent/account`.
 - Seen live: old HYPE sell orders reusing amlt-1169 (ledger: BTC buy) and amlt-1360 (ledger: HYPE buy) halted startup.

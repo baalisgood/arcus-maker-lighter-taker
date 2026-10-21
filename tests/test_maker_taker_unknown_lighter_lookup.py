@@ -42,3 +42,16 @@ def test_clientid_reuse_without_ledger_exchange_id_is_foreign_when_intent_contra
     e2=engine(tmp_path/'b');c2=maker(e2,qty='1',side=1);r2=dict(e2.journal.maker(c2))
     e2.receive(observation({**r2,'exchange_id':'NEW-1'},'0',status='open'))
     assert e2.sequence==1 and not e2.halt_reason
+
+
+def test_arcus_zero_size_rejected_push_is_status_only_and_inherits_ledger(tmp_path):
+    from test_arcus_adapter import adapter, row
+    from test_maker_taker_engine import maker
+    e=engine(tmp_path);client=maker(e,qty='1',side=1)
+    e.journal.observe_maker(client,__import__('decimal').Decimal(0),'open','EX-Z')
+    a=adapter();live=object.__new__(LiveTransport);live.identity='fake'
+    order=a._merge_order(row(order_id='EX-Z',status='REJECTED',clientId=client,originalSize='0',remainingSize='-1'))
+    obs=live.normalize(order,'arcus')
+    assert obs.requested is None and obs.cumulative is None and obs.status=='rejected'
+    adopted=e._adopt_ledger_identity(obs)
+    assert str(adopted.requested)=='1' and str(adopted.cumulative)=='0'
