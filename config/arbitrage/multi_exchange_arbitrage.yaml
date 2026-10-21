@@ -1,0 +1,14 @@
+# Arcus–Lighter VAR segmented baseline. Lighter fee assumes Standard account; verify account tier before live mode.
+enabled: true
+mode: one_to_many
+allow_reverse: true
+min_spread_pct: null
+center_exchange: lighter
+counter_exchanges:
+- arcus
+symbols:
+- BTC-USDC-PERP
+- ETH-USDC-PERP
+- BNB-USDC-PERP
+- SOL-USDC-PERP
+- HYPE-USDC-PERP

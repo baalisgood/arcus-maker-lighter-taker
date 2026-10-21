@@ -1,0 +1,327 @@
+# 中文研究说明（仅本地注释，2026-10-11）：当前 main_unified.py 将本文件作为 --execution-config。
+# 当前真正复用的是 arbitrage_execution；本文件 system_mode、arbitrage_decision、根 risk_control 属旧 V3 配置，不覆盖分段文件。
+# 分段开平仓阈值、数量、全局风控以 arbitrage_segmented.yaml 及当前实现为准，不要用这里旧 V3 数值推算实际策略。
+# 费率均为配置估算，不是个人账户实收；限价订单也不保证按 maker 费率收费。
+# 实现核对入口：config/unified_config_manager.py、config/arbitrage_config.py、execution/ 与 core/unified_orchestrator_init_mixin.py。
+# Arcus–Lighter VAR segmented baseline. Lighter fee assumes Standard account; verify account tier before live mode.
+# 运行模式与数据检查；当前分段入口以 arbitrage_segmented.yaml 的此节为准。
+system_mode:
+  # 旧 V3 监控开关，当前 true；统一分段入口以分段文件/启动脚本临时覆盖的 monitor_only 为准。
+  monitor_only: true
+  # 旧 V3 行情年龄上限，单位秒；当前统一分段入口采用分段文件的 2.5 秒，不是这里的 3 秒。
+  data_freshness_seconds: 3.0
+# 旧 V3 决策配置；当前 main_unified 分段入口未采用本节阈值，实际阶梯以分段文件为准。
+arbitrage_decision:
+  # 本组开关；true 为启用。 但本组不用于当前统一分段入口。
+  enabled: true
+  # 旧 V3 价差套利开关；true 为开启，但不是当前分段入口的总开关。
+  enable_spread_arbitrage: true
+  # 旧 V3 资金费套利开关；当前分段入口未使用本节驱动独立资金费套利。
+  enable_funding_rate_arbitrage: true
+  # 本模块阈值分组；注意监控显示/筛选阈值与实际分段开仓阈值不同。
+  thresholds:
+    # 旧 V3 净价差门槛，百分比数值；0.02=0.02%，当前分段开仓不用此值。
+    spread_arbitrage_threshold: 0.02
+    # 旧 V3 价差持续秒数；当前 2 秒，当前分段入口使用分段配置的持续窗口。
+    spread_persistence_seconds: 2
+    # 旧 V3 资金费率差阈值，百分比数值；0.01=0.01%，当前分段入口不采用。
+    funding_rate_diff_threshold: 0.01
+    # 旧 V3 可忽略价差阈值，百分比数值；当前分段入口不采用。
+    ignorable_spread_threshold: 0.05
+    # 旧 V3 可忽略资金费差阈值，百分比数值；当前分段入口不采用。
+    ignorable_funding_rate_diff_threshold: 0.01
+    # 旧 V3 历史分析窗口，单位小时；24=一天，当前分段入口不采用本节。
+    history_hours: 24
+    # 旧 V3 不利资金费持续时间阈值，单位分钟；不是当前分段强制退出时间。
+    unfavorable_funding_rate_duration_minutes: 60
+    # 旧 V3 止盈阈值，百分比数值；0.02=0.02%，不是当前分段止盈参数。
+    profit_target_threshold: 0.02
+    # 旧 V3 止损阈值，百分比数值；0.3=0.3%，不是当前分段 max_loss_percent。
+    loss_stop_threshold: 0.3
+    # 旧 V3 资金费年化阈值，单位 %/年；10 表示 10%，不是收益承诺。
+    funding_rate_annual_threshold: 10.0
+    # 旧 V3 资金费稳定性波动系数阈值（标准差/均值），无量纲；当前分段入口不采用。
+    funding_rate_stability_threshold: 0.5
+    # 旧 V3 持续性判断的最低资金费差，百分比数值；当前分段入口不采用。
+    funding_rate_min_threshold: 0.01
+    # 旧 V3 持续满足的样本/时间占比；0.8=80%，当前分段入口不采用。
+    funding_rate_duration_ratio: 0.8
+    # 旧 V3 极端资金费波动的占比阈值；0.1=10%，当前分段入口不采用。
+    funding_rate_extreme_ratio: 0.1
+    # 旧 V3 极端资金费波动倍数；1.5 为倍数，当前分段入口不采用。
+    funding_rate_extreme_multiplier: 1.5
+    # 旧 V3 价差波动系数阈值（标准差/绝对均值），无量纲；当前分段入口不采用。
+    spread_stability_threshold: 0.5
+    # 旧 V3 极端价差波动占比；0.15=15%，当前分段入口不采用。
+    spread_extreme_ratio: 0.15
+    # 旧 V3 极端价差变化倍数；2 表示两倍，当前分段入口不采用。
+    spread_extreme_multiplier: 2.0
+    # 旧 V3 稳定性判断最低样本数；当前 10 个，当前分段入口不采用。
+    min_data_points_for_stability: 10
+# 当前入口通过 --execution-config 加载的执行模块设置；下单模式、费率、限速和执行等待在此。
+arbitrage_execution:
+  # 默认组合执行模式 limit_market；实际组合还依赖各所 order_mode，当前两所均为 market。
+  default_order_mode: limit_market
+  # 数量参数组；分段入口由分段文件控制每格数量和拆单，不能用执行文件旧数量表推算本策略仓位。
+  quantity_config:
+    # 未单列交易所或币种时的回退设置。
+    default:
+      # 旧执行数量表中的单笔基础数量；当前分段订单数量由分段决策请求传入，不用此表替代 base_quantity/split_order_size。
+      single_order_quantity: 0.1
+      # 旧执行数量表中的最大基础数量；当前分段入口不能将此值当作该币实际持仓硬上限。
+      max_position_quantity: 0.2
+      # 旧执行数量表的小数位数；分段当前使用分段文件的币种数量精度，不能用此处值推算分段订单。
+      quantity_precision: 4
+    # BTC-USDC-PERP 的独立参数；基础数量单位为该币种，不是 USDC 金额。
+    BTC-USDC-PERP:
+      # 旧执行数量表中的单笔基础数量；当前分段订单数量由分段决策请求传入，不用此表替代 base_quantity/split_order_size。
+      single_order_quantity: 0.0015
+      # 旧执行数量表中的最大基础数量；当前分段入口不能将此值当作该币实际持仓硬上限。
+      max_position_quantity: 0.003
+      # 旧执行数量表的小数位数；分段当前使用分段文件的币种数量精度，不能用此处值推算分段订单。
+      quantity_precision: 3
+    # ETH-USDC-PERP 的独立参数；基础数量单位为该币种，不是 USDC 金额。
+    ETH-USDC-PERP:
+      # 旧执行数量表中的单笔基础数量；当前分段订单数量由分段决策请求传入，不用此表替代 base_quantity/split_order_size。
+      single_order_quantity: 0.03
+      # 旧执行数量表中的最大基础数量；当前分段入口不能将此值当作该币实际持仓硬上限。
+      max_position_quantity: 0.06
+      # 旧执行数量表的小数位数；分段当前使用分段文件的币种数量精度，不能用此处值推算分段订单。
+      quantity_precision: 2
+    # SOL-USDC-PERP 的独立参数；基础数量单位为该币种，不是 USDC 金额。
+    SOL-USDC-PERP:
+      # 旧执行数量表中的单笔基础数量；当前分段订单数量由分段决策请求传入，不用此表替代 base_quantity/split_order_size。
+      single_order_quantity: 1.7
+      # 旧执行数量表中的最大基础数量；当前分段入口不能将此值当作该币实际持仓硬上限。
+      max_position_quantity: 3.4
+      # 旧执行数量表的小数位数；分段当前使用分段文件的币种数量精度，不能用此处值推算分段订单。
+      quantity_precision: 1
+  # 按交易所设置订单模式；指定交易所配置优先于 default。
+  exchange_order_modes:
+    # arcus 专用设置；同组内优先于 default。
+    arcus:
+      # 该所订单模式；market 为市价执行路径，limit 为限价路径，不保证一定立即或全部成交。
+      order_mode: market
+      # 顺序执行的优先级，数值越大越先；当前 Arcus=2、Lighter=1，实际顺序仍取决于执行组合。
+      priority: 2
+      # 限价偏移小数比例（0.001=0.1%），按买卖方向形成激进价格；不是百分比数值字段。
+      limit_price_offset_pct: 0
+      # 保守限价偏移比例（买更低/卖更高）；0.0 表示不加此保守偏移。
+      limit_price_offset_conservative_pct: 0.0
+      # 是否按价格 tick 计算偏移；false 不启用此定价分支，不等于交易所不检查价格精度。
+      use_tick_precision: false
+      # tick 模式偏移档数；当前 tick 模式关闭。
+      tick_offset_steps: 1
+    # lighter 专用设置；同组内优先于 default。
+    lighter:
+      # 该所订单模式；market 为市价执行路径，limit 为限价路径，不保证一定立即或全部成交。
+      order_mode: market
+      # 顺序执行的优先级，数值越大越先；当前 Arcus=2、Lighter=1，实际顺序仍取决于执行组合。
+      priority: 1
+      # 限价偏移小数比例（0.001=0.1%），按买卖方向形成激进价格；不是百分比数值字段。
+      limit_price_offset_pct: 0.001
+      # 保守限价偏移比例（买更低/卖更高）；0.0 表示不加此保守偏移。
+      limit_price_offset_conservative_pct: 0.0
+      # 是否按价格 tick 计算偏移；false 不启用此定价分支，不等于交易所不检查价格精度。
+      use_tick_precision: false
+      # 是否强制限价腿顺序执行；false 不强制，只有相关限价组合才有意义。
+      force_sequential_limit: false
+      # 作为第二腿时是否强制激进限价；false 不强制。
+      force_limit_when_second_leg: false
+      # 第二腿激进限价是否复用信号价格；false 按相应路径重新取价。
+      reuse_signal_price_when_second_leg: false
+      # 智能第二腿取价开关；true 允许相关路径按第一腿表现选价，不保证提高收益。
+      smart_second_leg_price: true
+    # 未单列交易所或币种时的回退设置。
+    default:
+      # 该所订单模式；market 为市价执行路径，limit 为限价路径，不保证一定立即或全部成交。
+      order_mode: market
+      # 顺序执行的优先级，数值越大越先；当前 Arcus=2、Lighter=1，实际顺序仍取决于执行组合。
+      priority: 0
+  # 执行模块的费率估算表；分段决策同名交易所项可被分段 decision.exchange_fee_config 覆盖。
+  exchange_fees:
+    # 未单列交易所或币种时的回退设置。
+    default:
+      # 限价单估算费率，单位为小数比例（0.0001=0.01%）；0 表示按零费用估算，非账户实际费率证明。
+      limit_fee_rate: 0.0001
+      # 市价单估算费率，单位为小数比例；0.000225=0.0225%，0 表示按零费用估算；实际收费须以成交对账为准。
+      market_fee_rate: 0.0002
+    # lighter 专用设置；同组内优先于 default。
+    lighter:
+      # 限价单估算费率，单位为小数比例（0.0001=0.01%）；0 表示按零费用估算，非账户实际费率证明。
+      limit_fee_rate: 0.0
+      # 市价单估算费率，单位为小数比例；0.000225=0.0225%，0 表示按零费用估算；实际收费须以成交对账为准。
+      market_fee_rate: 0.0
+    # arcus 专用设置；同组内优先于 default。
+    arcus:
+      # 限价单估算费率，单位为小数比例（0.0001=0.01%）；0 表示按零费用估算，非账户实际费率证明。
+      limit_fee_rate: 0
+      # 市价单估算费率，单位为小数比例；0.000225=0.0225%，0 表示按零费用估算；实际收费须以成交对账为准。
+      market_fee_rate: 0.000225
+  # 执行器的本地下单限速，不能增加交易所账户/API 的真实配额。
+  exchange_rate_limits:
+    # 未单列交易所或币种时的回退设置。
+    default:
+      # 该所允许的本地并发订单数上限；1 表示串行名额，3 表示最多三个名额。
+      max_concurrent_orders: 1
+      # 该所连续下单最小间隔，单位毫秒；500=0.5 秒，0 表示不增加这项间隔。
+      min_interval_ms: 0
+      # 收到限流后的额外冷却，单位毫秒；1000=1 秒。
+      rate_limit_cooldown_ms: 1000
+    # lighter 专用设置；同组内优先于 default。
+    lighter:
+      # 该所允许的本地并发订单数上限；1 表示串行名额，3 表示最多三个名额。
+      max_concurrent_orders: 1
+      # 该所连续下单最小间隔，单位毫秒；500=0.5 秒，0 表示不增加这项间隔。
+      min_interval_ms: 500
+      # 收到限流后的额外冷却，单位毫秒；1000=1 秒。
+      rate_limit_cooldown_ms: 1500
+    # arcus 专用设置；同组内优先于 default。
+    arcus:
+      # 该所允许的本地并发订单数上限；1 表示串行名额，3 表示最多三个名额。
+      max_concurrent_orders: 3
+      # 该所连续下单最小间隔，单位毫秒；500=0.5 秒，0 表示不增加这项间隔。
+      min_interval_ms: 500
+      # 收到限流后的额外冷却，单位毫秒；1000=1 秒。
+      rate_limit_cooldown_ms: 2000
+  # 订单等待、重试与保护参数组；注意分段文件同名根节的消费边界。
+  order_execution:
+    # 限价单等待超时，单位秒；超时进入撤单/状态确认等处理，不保证此时已完成平仓。
+    limit_order_timeout: 30
+    # 限价挂单期间检查盘口变化并决定提前撤单的最小间隔，单位秒。
+    limit_order_reprice_min_interval_seconds: 1.0
+    # Lighter 市价单成交状态等待上限，单位秒；超时不等于确认未成交。
+    lighter_market_order_timeout: 60
+    # 一般执行重试次数参数；未知成交状态受保护，不代表可盲目重复发单。
+    max_retry_count: 1
+    # 双限价内部补齐/补仓的独立重试参数；不等于所有失败订单都可重放。
+    limit_limit_max_retry_count: 3
+    # 限价+市价模式中第一腿限价补单轮次；当前两所配置市价，仅对应模式才使用。
+    limit_market_first_leg_max_retry_count: 10
+    # 部分成交策略字段，cancel 表示取消的配置意图；当前执行器未找到对此字段的消费，不能据此保证部分成交自动撤净。
+    partial_fill_strategy: cancel
+    # 基础模式每轮完成后的等待秒数；当前统一分段入口显式将轮次等待设为 0，本处 60 不控制分段节奏。
+    round_pause_seconds: 60
+    # 允许双限价并行路径；true 不会把两所 market 配置自动改成限价。
+    enable_dual_limit_mode: true
+    # 双限价均未成交后的初始避让时间，单位秒；只在对应双限价路径使用。
+    dual_limit_retry_initial_delay: 5
+    # 双限价重试避让最大间隔，单位秒。
+    dual_limit_retry_max_delay: 60
+    # 双限价退避间隔的放大倍数；2.0 为每次两倍，受最大间隔约束。
+    dual_limit_retry_backoff_factor: 2.0
+    # 执行滑点保护配置；当前请求的分段 slippage_tolerance 优先于这里的回退值。
+    slippage_protection:
+      # 本组开关；true 为启用。 当前执行器未找到对该 enabled 字段的直接消费，不能仅靠此开关认定保护生效。
+      enabled: true
+      # 回退滑点比例；0.001=0.1%，不是 0.001%；分段显式滑点优先，不保证成交总损失上限。
+      max_slippage: 0.001
+  # 风险控制参数组；具体生效范围见下方各节说明。
+  risk_control:
+    # 执行风控最大基础数量字段；当前执行器未找到此字段的拒单消费，不能当作硬保护。
+    max_order_size: 1.0
+    # 执行风控最小基础数量字段；当前执行器未找到此处字段的拒单消费，实际以分段/市场限制为准。
+    min_order_size: 0.001
+    # 执行价格变化检查配置意图；当前执行器未找到此组消费，不能视为已启用的保护。
+    price_change_check:
+      # 本组开关；true 为启用。 当前执行器未找到对该 enabled 字段的直接消费，不能仅靠此开关认定保护生效。
+      enabled: true
+      # 价格变化门槛字段；当前执行器未找到消费，比例换算及触发行为需核，不应据名称假定有效。
+      max_price_change: 0.01
+# 风险控制参数组；具体生效范围见下方各节说明。
+risk_control:
+  # 旧全局持仓管理设置；当前分段全局风控不从执行文件根 risk_control 读取。 此处不覆盖当前分段入口。
+  position_management:
+    # 旧单币最大基础数量；当前分段入口不采用此处 10.0 作为上限。 此处不覆盖当前分段入口。
+    max_single_token_position: 10.0
+    # 旧总基础数量阈值；不是 USDC 金额，当前分段入口不采用此处 30.0。 此处不覆盖当前分段入口。
+    max_total_position: 30.0
+  # 账户余额监控；分段入口使用分段文件本节，严重不足优先于普通警告检查。 此处不覆盖当前分段入口。
+  balance_management:
+    # 旧全局余额警告线，单位 USDC；本处 50 不参与当前分段入口，分段文件另设余额参数。
+    min_balance_warning: 50.0
+    # 严重不足线，单位 USDC；低于此线触发严重余额处理及已绑定的受控平仓回调，不保证立即全部成交。 此处不覆盖当前分段入口。
+    min_balance_close_position: 40.0
+    # 本组检查周期，单位秒；不是逐笔成交超时。 此处不覆盖当前分段入口。
+    check_interval: 60
+  # 旧全局网络故障设置；当前分段入口不读取此处根风控配置。 此处不覆盖当前分段入口。
+  network_failure:
+    # 本组开关；true 为启用。 此处不覆盖当前分段入口。 但本组不用于当前统一分段入口。
+    enabled: true
+    # 旧网络重连间隔，单位秒；不覆盖当前分段适配器连接参数。 此处不覆盖当前分段入口。
+    reconnect_interval: 30
+    # 本模块重连次数上限配置；实际连接策略是否消费此字段见本节入口说明。 此处不覆盖当前分段入口。
+    max_reconnect_attempts: 100000000
+    # 恢复后是否自动恢复的配置意图；本执行文件根风控不用于当前分段入口。 此处不覆盖当前分段入口。
+    auto_resume: true
+  # 旧全局交易所维护检测设置；当前分段入口不读取此节。 此处不覆盖当前分段入口。
+  exchange_maintenance:
+    # 本组开关；true 为启用。 此处不覆盖当前分段入口。 但本组不用于当前统一分段入口。
+    enabled: true
+    # 本组检查周期，单位秒；不是逐笔成交超时。 此处不覆盖当前分段入口。
+    check_interval: 60
+    # 旧维护检测的 HTTP 错误码列表；502/503 并不能单独证明交易所正在维护。 此处不覆盖当前分段入口。
+    maintenance_error_codes:
+    # 本列表中的 HTTP 状态码；仅是维护识别配置。
+    - 503
+    # 本列表中的 HTTP 状态码；仅是维护识别配置。
+    - 502
+    # 恢复后是否自动恢复的配置意图；本执行文件根风控不用于当前分段入口。 此处不覆盖当前分段入口。
+    auto_resume: true
+  # 旧全局价格异常设置；当前分段入口不读取此节。 此处不覆盖当前分段入口。
+  price_anomaly:
+    # 本组开关；true 为启用。 此处不覆盖当前分段入口。 但本组不用于当前统一分段入口。
+    enabled: true
+    # 旧价格变化比例阈值；0.05=5%，本节不作为当前分段价格稳定性门槛。 此处不覆盖当前分段入口。
+    max_price_change_rate: 0.05
+    # 旧价格异常观察窗口，单位秒；本节不用于当前分段入口。 此处不覆盖当前分段入口。
+    check_window: 5
+  # 旧全局订单异常设置；当前分段入口不读取此节。 此处不覆盖当前分段入口。
+  order_anomaly:
+    # 本组开关；true 为启用。 此处不覆盖当前分段入口。 但本组不用于当前统一分段入口。
+    enabled: true
+    # 旧订单最大等待时间，单位秒；本节不覆盖当前实际订单超时设置。 此处不覆盖当前分段入口。
+    max_order_wait_time: 300
+    # 旧超时自动撤单配置意图；当前分段入口不读取此项，不保证到时自动撤净。 此处不覆盖当前分段入口。
+    auto_cancel_timeout: true
+  # 旧全局资金费异常设置；当前分段入口不读取此节。 此处不覆盖当前分段入口。
+  funding_rate_anomaly:
+    # 本组开关；true 为启用。 此处不覆盖当前分段入口。 但本组不用于当前统一分段入口。
+    enabled: true
+    # 旧资金费变化门槛；当前分段入口不消费，具体旧入口口径需核。 此处不覆盖当前分段入口。
+    max_funding_rate_change: 0.3
+  # 旧全局持仓时限配置；分段入口改从分段文件根 risk_control.position_duration 读取。
+  # 分段文件未写此节，因此当前使用类默认 168 小时，不是这里的 24 小时；恢复仓位的计时受恢复信息限制。 此处不覆盖当前分段入口。
+  position_duration:
+    # 本组开关；true 为启用。 此处不覆盖当前分段入口。 但本组不用于当前统一分段入口。
+    enabled: true
+    # 持仓时限字段，单位小时；本处 24 不用于当前分段入口，当前默认 168 小时。 此处不覆盖当前分段入口。
+    max_position_duration: 24
+    # 超时请求平仓开关；本处不用于当前分段入口，且请求退出不保证即时成交。 此处不覆盖当前分段入口。
+    auto_close_on_timeout: true
+  # 旧单笔交易风险配置；当前分段入口不读取此节。 此处不覆盖当前分段入口。
+  single_trade_risk:
+    # 本组开关；true 为启用。 此处不覆盖当前分段入口。 但本组不用于当前统一分段入口。
+    enabled: true
+    # 旧单笔最大亏损金额，单位 USDC；不是当前分段 max_loss_percent，也不保证 1000U 封顶。 此处不覆盖当前分段入口。
+    max_single_trade_loss: 1000.0
+  # 旧每日交易次数限制；当前分段入口不读取此节，不能据 true 推断每日只做 100 次。 此处不覆盖当前分段入口。
+  daily_trade_limit:
+    # 本组开关；true 为启用。 此处不覆盖当前分段入口。 但本组不用于当前统一分段入口。
+    enabled: true
+    # 旧每日次数上限，单位次；本处不控制当前分段交易频次。 此处不覆盖当前分段入口。
+    max_daily_trades: 100
+  # 旧币种风控名单；当前分段入口不读取此节。 此处不覆盖当前分段入口。
+  symbol_risk:
+    # 旧禁用币种列表；空表示本表未列禁用品种，不代替分段 symbol_configs。 此处不覆盖当前分段入口。
+    disabled_symbols: []
+    # 旧高风险币种列表；空表示本表未标记，不表示市场没有风险。 此处不覆盖当前分段入口。
+    high_risk_symbols: []
+  # 旧数据一致性设置；当前分段入口不读取此节。 此处不覆盖当前分段入口。
+  data_consistency:
+    # 本组开关；true 为启用。 此处不覆盖当前分段入口。 但本组不用于当前统一分段入口。
+    enabled: true
+    # 本组检查周期，单位秒；不是逐笔成交超时。 此处不覆盖当前分段入口。
+    check_interval: 300
+    # 旧自动修复开关意图；不启用当前分段 position_alignment_auto_fix。 此处不覆盖当前分段入口。
+    auto_fix: true

@@ -1,0 +1,32 @@
+{
+  "warmup_seconds":60,
+  "description":"Synthetic deterministic offline replay; real protocol field names, no live market evidence",
+  "arcus_markets":[
+    {"marketDisplayName":"BTC-USD","marketId":1,"status":"ONLINE","stepSize":".00000001","minOrderSize":".0001","minOrderNotional":"5","maxOrderSize":"100","tickSize":".1","markPrice":"50000"},
+    {"marketDisplayName":"ETH-USD","marketId":2,"status":"ONLINE","stepSize":".0000001","minOrderSize":".001","minOrderNotional":"5","maxOrderSize":"1000","tickSize":".01","markPrice":"2500"},
+    {"marketDisplayName":"SOL-USD","marketId":3,"status":"ONLINE","stepSize":".000001","minOrderSize":".01","minOrderNotional":"5","maxOrderSize":"10000","tickSize":".001","markPrice":"100"},
+    {"marketDisplayName":"HYPE-USD","marketId":4,"status":"ONLINE","stepSize":".000001","minOrderSize":".1","minOrderNotional":"5","maxOrderSize":"10000","tickSize":".001","markPrice":"50"}
+  ],
+  "lighter_markets":[
+    {"symbol":"BTC","market_id":1,"market_type":"perp","status":"active","supported_size_decimals":5,"supported_price_decimals":1,"min_base_amount":".00007","min_quote_amount":"10"},
+    {"symbol":"ETH","market_id":0,"market_type":"perp","status":"active","supported_size_decimals":4,"supported_price_decimals":2,"min_base_amount":".002","min_quote_amount":"10"},
+    {"symbol":"SOL","market_id":2,"market_type":"perp","status":"active","supported_size_decimals":3,"supported_price_decimals":3,"min_base_amount":".055","min_quote_amount":"10"},
+    {"symbol":"HYPE","market_id":3,"market_type":"perp","status":"active","supported_size_decimals":2,"supported_price_decimals":3,"min_base_amount":".07","min_quote_amount":"10"}
+  ],
+  "initial_books":[
+    {"venue":"lighter","symbol":"BTC-USDC-PERP","bids":[["50000","10"]],"asks":[["50001","10"]]},
+    {"venue":"arcus","symbol":"BTC-USDC-PERP","bids":[["49900","10"]],"asks":[["50100","10"]]},
+    {"venue":"lighter","symbol":"ETH-USDC-PERP","bids":[["2500","10"]],"asks":[["2501","10"]]},
+    {"venue":"arcus","symbol":"ETH-USDC-PERP","bids":[["2490","10"]],"asks":[["2510","10"]]},
+    {"venue":"lighter","symbol":"SOL-USDC-PERP","bids":[["100","10"]],"asks":[["100.1","10"]]},
+    {"venue":"arcus","symbol":"SOL-USDC-PERP","bids":[["99","10"]],"asks":[["101","10"]]},
+    {"venue":"lighter","symbol":"HYPE-USDC-PERP","bids":[["50","10"]],"asks":[["50.1","10"]]},
+    {"venue":"arcus","symbol":"HYPE-USDC-PERP","bids":[["49","10"]],"asks":[["51","10"]]}
+  ],
+  "frames":[
+    {"venue":"arcus","symbol":"BTC-USDC-PERP","bids":[["49900","10"]],"asks":[["49950","10"]]},
+    {"venue":"arcus","symbol":"ETH-USDC-PERP","bids":[["2490","10"]],"asks":[["2495","10"]]},
+    {"venue":"arcus","symbol":"SOL-USDC-PERP","bids":[["99.7","10"]],"asks":[["99.8","10"]]},
+    {"venue":"arcus","symbol":"HYPE-USDC-PERP","bids":[["49.7","10"]],"asks":[["49.8","10"]]}
+  ]
+}

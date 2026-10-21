@@ -1,0 +1,14 @@
+# Public settings only. Credentials are injected by the explicit live entry.
+exchange_id: lighter
+api_config:
+  testnet: false
+  api_url: https://mainnet.zklighter.elliot.ai
+  ws_mainnet_url: wss://mainnet.zklighter.elliot.ai/stream
+subscription_mode:
+  mode: predefined
+  predefined:
+    symbols: [BTC-USD, ETH-USD, SOL-USD, HYPE-USD]
+    data_types: {ticker: false, orderbook: true, trades: false, user_data: true}
+extra_params:
+  strict_order_state: true
+  official_transport_only: true

@@ -1,0 +1,27 @@
+# Private runtime and generated material
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+config/exchanges/
+!config/exchanges/
+config/exchanges/*
+!config/exchanges/lighter_runtime.yaml
+!config/exchanges/arcus_runtime.yaml
+/logs/
+/data/
+/run/
+/backups/
+/.venv/
+/venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.DS_Store
+*.bak
+*.backup*
+*.tar.gz
+*.zip

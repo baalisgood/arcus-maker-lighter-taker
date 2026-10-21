@@ -1,0 +1,70 @@
+# Maker runner profile. Percent values: 0.005 means 0.005%.
+# Only maker/hedge/risk and the merged per-symbol grid/quantity settings drive this runner.
+# Legacy taker risk settings are preserved separately in arbitrage_taker_taker.yaml.
+execution_mode: maker_taker
+system_mode:
+  monitor_only: true # compatibility metadata; run_maker_taker.py --mode selects paper/live explicitly
+maker:
+  exchange: arcus
+  post_only: true
+  requote_threshold: 0.006
+  basis_ema_seconds: 60 # time constant for fresh Arcus/Lighter mid basis center
+  quick_resume_seconds: 10 # same-socket connection timeouts shorter than this retain EMA
+  warmup_seconds: 60 # continuous healthy observation before new quotes
+  max_order_age: 30
+  max_requotes_per_sec: 2
+hedge:
+  exchange: lighter
+  order_type: market
+  max_retries: 3 # initial attempt plus <=3 retries, only after definitive terminal state
+  max_hedge_latency_ms: 500 # monitored target; Standard taker speed bump alone is 300ms
+  request_timeout: 5
+risk:
+  max_unhedged_notional: 500
+  stale_book_seconds: 5
+  reconcile_interval: 30
+  allocation_per_venue: 5000
+  leverage: 2
+  reserve_ratio: 0.02
+default_config:
+  grid_config:
+    initial_spread_threshold: 0.015
+    close_threshold: 0
+    min_close_profit: 0.01 # estimated combined two-leg profit percent, before fees/slippage
+    close_floor_timeout: 600 # each FIFO opening maker fill ages independently
+    grid_step: 0.005
+    max_segments: 2
+    profit_per_segment: 0.03
+    use_symmetric_close: false
+    scalp_profit_threshold: 0
+    scalping_enabled: false
+    scalping_trigger_segment: 2
+    scalping_profit_threshold: 0.03
+    spread_persistence_seconds: 0
+  quantity_config:
+    base_quantity: 1
+    quantity_mode: fixed
+    target_value_usdc: 100
+    quantity_precision: 8
+  risk_config:
+    max_position_value: 10000
+    max_loss_percent: 2
+symbol_configs:
+  BTC-USDC-PERP:
+    enabled: true
+    grid_config: {initial_spread_threshold: 0.02, grid_step: 0.01, max_segments: 2}
+    quantity_config: {base_quantity: 0.001}
+  ETH-USDC-PERP:
+    enabled: true
+    grid_config: {initial_spread_threshold: 0.02, grid_step: 0.01, max_segments: 2}
+    quantity_config: {base_quantity: 0.03}
+  SOL-USDC-PERP:
+    enabled: true
+    grid_config: {initial_spread_threshold: 0.02, grid_step: 0.01, max_segments: 2}
+    quantity_config: {base_quantity: 0.5}
+  HYPE-USDC-PERP:
+    enabled: true
+    grid_config: {initial_spread_threshold: 0.02, grid_step: 0.01, max_segments: 2}
+    quantity_config: {base_quantity: 1}
+  BNB-USDC-PERP:
+    enabled: false

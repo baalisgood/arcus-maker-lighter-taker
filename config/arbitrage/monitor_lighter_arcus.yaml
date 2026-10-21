@@ -1,0 +1,105 @@
+# 中文研究说明（仅本地注释，2026-10-11）：当前 main_unified.py 通过 --monitor-config 加载本文件。
+# 本文件负责市场名单、行情数据流、UI 和历史记录；实际分段开平仓阈值在 arbitrage_segmented.yaml。
+# “已加载”不等于所有入口都消费；以下对旧监控专用或未找到统一入口消费的字段作单独说明。
+# 实现核对入口：config/monitor_config.py、core/orchestrator_bootstrap.py、core/unified_orchestrator_init_mixin.py、history/spread_history_recorder.py。
+# Arcus–Lighter VAR segmented baseline. Lighter fee assumes Standard account; verify account tier before live mode.
+# 行情与套利涉及的交易所名单；这里为 Lighter、Arcus，需同时满足适配器配置和市场映射。
+exchanges:
+# 本列表中的交易所/币种标识，按原顺序保留。
+- lighter
+# 本列表中的交易所/币种标识，按原顺序保留。
+- arcus
+# 标准永续交易对显示/订阅列表；实际开仓还须匹配分段配置和交易所对配置。
+symbols:
+# 本列表中的交易所/币种标识，按原顺序保留。
+- BTC-USDC-PERP
+# 本列表中的交易所/币种标识，按原顺序保留。
+- ETH-USDC-PERP
+# 本列表中的交易所/币种标识，按原顺序保留。
+- SOL-USDC-PERP
+# 本列表中的交易所/币种标识，按原顺序保留。
+- HYPE-USDC-PERP
+# 本模块阈值分组；注意监控显示/筛选阈值与实际分段开仓阈值不同。
+thresholds:
+  # 监控机会筛选价差阈值，百分比数值；0.1=0.1%，不是当前分段阶梯开仓门槛。
+  min_spread_pct: 0.1
+  # 监控资金费差阈值，百分比数值；0.01=0.01%，当前统一分段入口未找到使用。
+  min_funding_rate_diff: 0.01
+# 监控层 WebSocket 参数；当前仅找到加载，未找到统一分段入口将这些值传给适配器，不能保证改变底层连接。
+websocket:
+  # 监控层心跳间隔字段，单位秒；本节当前入口未找到实际消费。
+  ping_interval: 30
+  # 监控层重连等待字段，单位秒；本节当前入口未找到实际消费。
+  reconnect_delay: 5
+  # 监控层重连次数上限字段；5 表示五次，当前统一分段入口未找到向适配器传递本项。
+  max_reconnect_attempts: 5
+# 监控计算、UI 刷新和事件循环节奏；不是保证每个周期都有新报价。
+performance:
+  # 分析间隔字段，单位毫秒；旧监控循环使用，当前统一分段循环使用 loop_interval_ms，未找到直接使用此项。
+  analysis_interval_ms: 10
+  # 界面目标刷新间隔，单位毫秒；1000=1 秒，实际仍受 UI 最小间隔和任务调度限制。
+  ui_refresh_interval_ms: 1000
+  # 统一分段主循环的等待间隔，单位毫秒；100=0.1 秒，不等于下单频率。
+  loop_interval_ms: 100
+  # 数据处理每轮可占用的时间预算，单位毫秒；当前 20，避免处理积压长时间独占循环。
+  data_processor_time_budget_ms: 20
+# 行情数据传递方式和事件触发分析设置。
+data_flow:
+  # true 保留最新行情快照供消费，减少逐条历史队列积压；不表示不会丢弃中间更新。
+  latest_only_mode: true
+  # 最新快照轮询间隔，单位毫秒；0 表示配置不添加固定等待，实际受任务调度影响。
+  latest_poll_interval_ms: 0
+  # true 允许行情更新触发分析；仍须通过所有开平仓条件。
+  event_driven_analysis_enabled: true
+  # 事件触发分析的最短间隔，单位毫秒；0 表示不额外节流。
+  event_driven_analysis_min_interval_ms: 0
+# 跨交易所报价轮询锚点对齐与相关日志节流。
+spread_alignment:
+  # true 启用可用的轮询锚点对齐；是否可对齐取决于数据来源，不保证跨所报价同时产生。
+  poll_anchor_alignment_enabled: true
+  # 记录跳过对齐原因的最小日志间隔，单位秒；300=5 分钟，不是跳过交易的时长。
+  poll_anchor_alignment_skip_log_interval_seconds: 300
+  # 记录启用对齐信息的最小日志间隔，单位秒；3600=1 小时，不是每小时才计算价差。
+  poll_anchor_alignment_enable_log_interval_seconds: 3600
+# 监控健康与启动等待相关参数；不等于账户风险检查周期。
+health_check:
+  # 健康检查间隔字段，单位秒；旧监控入口使用，当前统一入口未找到直接消费本项。
+  interval: 10
+  # 行情等待/超时参数，单位秒；当前统一启动等待使用 90 秒，不覆盖分段 data_freshness_seconds=2.5 的报价新鲜度。
+  data_timeout: 90
+# 价差历史本地采样、写入与文件维护设置；记录历史不代表已实现收益。
+spread_history:
+  # 本组开关；true 为启用。
+  enabled: true
+  # 历史数据目录，相对项目运行目录解析；当前 data/spread_history。
+  data_dir: data/spread_history
+  # 历史采样设置；与交易决策每次收到报价的频率不同。
+  sampling:
+    # 本组周期，单位秒；历史采样 60 秒，CLI 调试输出 1 秒，分别由各自开关控制。
+    interval_seconds: 60
+    # max 表示在采样窗口选最大价差记录；不能当作窗口内一直可成交的价格。
+    strategy: max
+  # 历史异步写入队列与批次设置。
+  write:
+    # 写入批次目标记录数；当前 10 条，亦受批次超时控制。
+    batch_size: 10
+    # 批次最大等待时间，单位秒；60.0 秒触发不足整批的写入。
+    batch_timeout: 60.0
+    # 历史写入队列容量，单位条；500 条，不是保留历史总条数。
+    queue_maxsize: 500
+  # 历史 CSV 压缩/归档维护；不设置策略仓位或交易保留期限。
+  storage:
+    # 历史原始 CSV 的压缩年龄阈值，单位天；10 天前文件由维护任务处理。
+    compress_after_days: 10
+    # 历史原始文件归档年龄阈值，单位天；30 天前文件由维护任务移动/压缩，不等于自动删除全部历史。
+    archive_after_days: 30
+    # 历史维护运行间隔，单位小时；24 表示每日周期，源码启动后还先等待一小时。
+    cleanup_interval_hours: 24
+# 简易 CLI 调试输出；当前 false，常规 UI 仍按现有入口运行。
+debug_cli:
+  # 本组开关；false 为关闭，本组其余参数暂不触发该功能。
+  enabled: false
+  # 本组周期，单位秒；历史采样 60 秒，CLI 调试输出 1 秒，分别由各自开关控制。
+  interval_seconds: 1.0
+# 多交易所套利对配置路径；命令行 --multi-exchange-config 若提供则优先，不能仅靠本文件的 symbols 推断最终启用配对。
+multi_exchange_config_path: config/arbitrage/multi_exchange_arbitrage.yaml

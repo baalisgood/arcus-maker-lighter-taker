@@ -1,0 +1,95 @@
+# Change list
+
+## Unknown hedge recovery and diagnostics
+
+- Add `tools/operator_resolve_hedge.py`: read-only dry run by default; with `--confirm` it closes a single unresolved Lighter hedge attempt only when live positions prove its fill amount (Arcus equals ledger, Lighter differs by 0..remaining in hedge direction, no open Lighter order, attempt older than 120s). Remaining exposure is re-hedged by normal recovery on next start.
+- Arcus pushes for known orders that omit `clientId` or the market name adopt identity from the ledger row matched by exchange order id; conflicting values still fail closed.
+- `Observation does not match durable intent/account` now lists each mismatching field (observed vs ledger) and records an `observation_mismatch` event; leverage halts include per-symbol leverage.
+- Lighter client-id history search parses only the requested identity; unknown-transaction evidence records nonce, key index and transaction event info.
+- Lighter fills retry once with market scope on request rejection and record the API error; funding rows for unconfigured markets (shared account) are skipped and reported instead of failing coverage.
+
+## Received-frame liveness and execution diagnostics
+
+- Separate book continuity from socket liveness, observe real data/control frames on public/private maker sockets and actively ping; static books retain their identity and consumed paper depth.
+- Use official Arcus full-snapshot and Lighter prior-nonce linkage rules, preserve EMA only for short same-socket timeouts, and recheck Lighter admission after lock/nonce awaits before signing.
+- Materialize close-intent mode and exact confirmed FIFO gross tranches with atomic diagnostic-only event enrichment/cursor/audit; retain unknown actual price/time coverage.
+- Add complete observed-runtime resting quote uptime, stale reason/episode durations, per-period roundtrips, gross PnL/notional ratios, actual holding time and weighted edge/slippage coverage without a schema or dependency change.
+- Replace SQLite-version-specific plan wording assertions with measured incremental work, keep metadata prefix checks indexable and preserve archive-aware diagnostic attribution.
+- Preserve EMA and pause incomplete warmup for short same-socket private timeouts while retaining global cancellation; reset after long private gaps or a socket/generation change, including a long gap recovered between checks.
+- Count floor/timeout closes by completed unique obligation, expose stable gross PnL/stale event fields and retain independent stale intervals across process boots.
+- Recheck all normal Arcus makers after write-lock/authentication waits before signing, and reuse a successful close cancellation’s reserved cycle for its same-direction replacement without increasing the requote rate.
+
+## FIFO estimated close-profit floor
+
+- Add per-symbol merged `min_close_profit` (default 0.01%) and `close_floor_timeout` (default 600 seconds), with finite range validation.
+- Protect normal close quotes using actual two-leg FIFO opening fills; each lot ages independently, expired portions do not subsidize fresh portions, and partial closes revalue the remaining FIFO quantity.
+- Replay committed events into current lots and unsettled restoration undo without a schema change; preserve original price/time on restoration and use persistent conservative observation time only when attribution is unavailable.
+- Recheck closing bounds on market changes, partial fills, expiry, capital admission and immediately before Arcus signing; protective cancellations bypass replacement throttles while re-posting respects them.
+
+## Paper hedge depth and progress diagnostics
+
+- Retain immutable public depth and match paper Lighter IOC fills across eligible levels using the live native price bound, lot precision, VWAP and per-snapshot liquidity consumption.
+- Count only confirmed zero-filled terminal Lighter attempts against the existing initial-plus-retries failure budget; positive partial progress and deferred attempts do not consume or reset it.
+- Persist the first halt cause and retain it in runtime/final output even when later cancellation, emergency or latency alarms occur.
+
+## Current-state performance and market readiness
+
+- Upgrade strictly validated v1/v2 journals atomically to v3 exact current inventory and pending IDs; index active lifecycle and relationship queries and remove full-history reads from trading callbacks.
+- Move bounded, completely closed FIFO components into archive tables in transactional maintenance batches; restore complete components for late maker deltas, preserve history/finance coverage and reject inconsistent derived/archive state.
+- Yield finance history processing and run hourly statistics on a dedicated read-only snapshot in a fresh interpreter without inherited credentials or socket descriptors.
+- Require 60 continuous fresh seconds before new opening/closing quotes, separately from EMA tau and startup subscription readiness; replay now simulates the same warmup.
+- Isolate stale/generation-invalid symbols for cancellation and admission while retaining global venue/private disconnect, UNKNOWN, cancellation and capital protections.
+
+## Basis center and residual accumulation
+
+- Quote opening and closing around a fresh per-symbol time-weighted EMA basis center; crossing prices use the nearest legal passive tick across tiers.
+- Upgrade validated v1 journals transactionally to v2 FIFO attempt allocations. Keep original obligation attribution, retry budgets and UNKNOWN identity recovery.
+- Accumulate compatible residuals until precision, metadata minBase and the conservative max(10 USDC, minQuote) policy pass; deferred dust remains in risk accounting and permits reconciled restart.
+- Recheck policy before live signing and in paper mode; size each small-live flat quote for both venue minimums. Report pending residuals and flatness separately at shutdown.
+- Attribute aggregated actual execution slippage using filled allocations; retain unknown cumulative economics as unknown.
+
+
+## Maker strategy and accounting
+
+- `core/services/arbitrage_monitor_v2/config/maker_taker_config.py`: typed, validated maker/hedge/risk profiles; strict disabled symbols and mode selection.
+- `core/services/arbitrage_monitor_v2/execution/maker_taker_engine.py`: quotes, fill workers, independent risk cancellation, portfolio reservations, reconciliation with fresh capital checks before every corrective send, recovery and bounded shutdown.
+- `core/services/arbitrage_monitor_v2/execution/maker_taker_journal.py`: SQLite intent/identity/fill/hedge durability, schema checks and execution/funding coverage records.
+- `core/services/arbitrage_monitor_v2/execution/maker_taker_quotes.py`: percentage formulas, tick-tier rounding and common quantity precision.
+- `core/services/arbitrage_monitor_v2/execution/maker_taker_paper.py`: public-only market streams and deterministic conservative paper execution.
+- `core/services/arbitrage_monitor_v2/execution/maker_taker_live.py`: explicit live bridge, authoritative observations, known-ID recovery and account-scoped finance reads.
+- `core/services/arbitrage_monitor_v2/history/maker_taker_finance.py`: actual trade/funding backfill, pagination, deduplication and explicit unverified Lighter semantics.
+- `core/services/arbitrage_monitor_v2/history/maker_taker_statistics.py`: hourly/daily volume, fees, funding, latency, slippage and cost-coverage projections.
+
+## Adapter and transport boundaries
+
+- `core/adapters/exchanges/official_transport.py`: official API destinations, verified TLS before signer/token creation, disabled HTTP/WebSocket redirects and disabled environment proxies for authenticated clients.
+- `core/adapters/exchanges/adapters/arcus.py`: quantity-independent observations, client-ID lookup, safe known-order cancellation and redirected-write UNKNOWN handling.
+- `core/adapters/exchanges/adapters/arcus_websocket.py`: socket generations and nonblocking quantity callbacks/recovery.
+- `core/adapters/exchanges/adapters/lighter.py`: public runtime settings with explicit credential injection and validation before signer construction.
+- `core/adapters/exchanges/adapters/lighter_base.py`: transport protection for signer-owned API clients.
+- `core/adapters/exchanges/adapters/lighter_rest.py`: durable pre-send audit hooks, strict size precision, equity validation and paginated order recovery.
+- `core/adapters/exchanges/adapters/lighter_websocket.py`: account index zero, socket-bound heartbeat, receive freshness, immediate private-reader readiness invalidation and protected WebSocket connections.
+
+## Entry and configuration
+
+- `run_maker_taker.py`, `start.sh`: explicit paper/monitor/live/replay/legacy modes, separate account locks and signal handling.
+- `main_unified.py`, `scripts/start_lighter_arcus.sh`: retain explicit legacy execution and prevent legacy ownership of a maker profile.
+- `core/services/arbitrage_monitor_v2/config/symbol_config.py`: no default fallback for disabled/unconfigured maker symbols.
+- `core/services/arbitrage_monitor_v2/core/orchestrator_bootstrap.py`: public Arcus/Lighter runtime settings with environment-backed authentication for the legacy entry.
+- `config/arbitrage/arbitrage_segmented.yaml`: maker defaults, four enabled symbols, quantities and portfolio limits.
+- `config/arbitrage/monitor_lighter_arcus.yaml`: BTC, ETH, SOL and HYPE subscriptions.
+- `config/arbitrage/arbitrage_taker_taker.yaml`: separate preserved legacy strategy profile.
+- `config/exchanges/arcus_runtime.yaml`, `config/exchanges/lighter_runtime.yaml`: public settings without credentials.
+- `.gitignore`: exclude private/runtime material while retaining public runtime samples; obsolete unprefixed `gitignore`/`gitattributes` files were removed.
+
+## Verification and operator documentation
+
+- `tests/test_maker_taker_engine.py`: duplicate/partial/unknown fills, crash boundaries, cancellation races, reservations, reconciliation and dispatch timing.
+- `tests/test_maker_taker_boundaries.py`: configuration, quotes, public protocol fixtures, paper/monitor entry, equity, locks and environment-backed legacy bootstrap.
+- `tests/test_maker_taker_finance.py`: actual Arcus money, raw Lighter semantics, pagination, deduplication and incomplete-cost behavior.
+- `tests/test_maker_taker_security.py`: account lock overlap, corrupt journal rejection, destination validation and redirect protection.
+- `tests/fixtures/maker_taker_replay.json`: synthetic offline replay, explicitly separate from live public-market evidence.
+- `tests/legacy_fixtures.py`: self-contained retained executor fixtures.
+- `tests/test_arcus_adapter.py`, `tests/test_arcus_lighter_live_guards.py`, `tests/test_lighter_strict_state.py`, `tests/test_arbitrage_regressions.py`: update configuration/fixture expectations for the independent profiles and strict validation.
+- `requirements-test.txt`: pinned development test dependency; production dependencies remain in `requirements-lighter-arcus.txt`.
+- `README.md`: setup, configuration units, paper/live/tmux commands, stop/recovery behavior and unverified live/economic acceptance boundaries.

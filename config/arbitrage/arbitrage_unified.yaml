@@ -1,0 +1,161 @@
+# Arcus–Lighter VAR segmented baseline. Lighter fee assumes Standard account; verify account tier before live mode.
+system_mode:
+  monitor_only: true
+  data_freshness_seconds: 3.0
+arbitrage_decision:
+  enabled: true
+  enable_spread_arbitrage: true
+  enable_funding_rate_arbitrage: true
+  thresholds:
+    spread_arbitrage_threshold: 0.02
+    spread_persistence_seconds: 2
+    funding_rate_diff_threshold: 0.01
+    ignorable_spread_threshold: 0.05
+    ignorable_funding_rate_diff_threshold: 0.01
+    history_hours: 24
+    unfavorable_funding_rate_duration_minutes: 60
+    profit_target_threshold: 0.02
+    loss_stop_threshold: 0.3
+    funding_rate_annual_threshold: 10.0
+    funding_rate_stability_threshold: 0.5
+    funding_rate_min_threshold: 0.01
+    funding_rate_duration_ratio: 0.8
+    funding_rate_extreme_ratio: 0.1
+    funding_rate_extreme_multiplier: 1.5
+    spread_stability_threshold: 0.5
+    spread_extreme_ratio: 0.15
+    spread_extreme_multiplier: 2.0
+    min_data_points_for_stability: 10
+arbitrage_execution:
+  default_order_mode: limit_market
+  quantity_config:
+    default:
+      single_order_quantity: 0.1
+      max_position_quantity: 0.2
+      quantity_precision: 4
+    BTC-USDC-PERP:
+      single_order_quantity: 0.0015
+      max_position_quantity: 0.003
+      quantity_precision: 3
+    ETH-USDC-PERP:
+      single_order_quantity: 0.03
+      max_position_quantity: 0.06
+      quantity_precision: 2
+    SOL-USDC-PERP:
+      single_order_quantity: 1.7
+      max_position_quantity: 3.4
+      quantity_precision: 1
+  exchange_order_modes:
+    arcus:
+      order_mode: market
+      priority: 2
+      limit_price_offset_pct: 0
+      limit_price_offset_conservative_pct: 0.0
+      use_tick_precision: false
+      tick_offset_steps: 1
+    lighter:
+      order_mode: market
+      priority: 1
+      limit_price_offset_pct: 0.001
+      limit_price_offset_conservative_pct: 0.0
+      use_tick_precision: false
+      force_sequential_limit: false
+      force_limit_when_second_leg: false
+      reuse_signal_price_when_second_leg: false
+      smart_second_leg_price: true
+    default:
+      order_mode: market
+      priority: 0
+  exchange_fees:
+    default:
+      limit_fee_rate: 0.0001
+      market_fee_rate: 0.0002
+    lighter:
+      limit_fee_rate: 0.0
+      market_fee_rate: 0.0
+    arcus:
+      limit_fee_rate: 0
+      market_fee_rate: 0.000225
+  exchange_rate_limits:
+    default:
+      max_concurrent_orders: 1
+      min_interval_ms: 0
+      rate_limit_cooldown_ms: 1000
+    lighter:
+      max_concurrent_orders: 1
+      min_interval_ms: 500
+      rate_limit_cooldown_ms: 1500
+    arcus:
+      max_concurrent_orders: 3
+      min_interval_ms: 500
+      rate_limit_cooldown_ms: 2000
+  order_execution:
+    limit_order_timeout: 30
+    limit_order_reprice_min_interval_seconds: 1.0
+    lighter_market_order_timeout: 60
+    max_retry_count: 1
+    limit_limit_max_retry_count: 3
+    limit_market_first_leg_max_retry_count: 10
+    partial_fill_strategy: cancel
+    round_pause_seconds: 60
+    enable_dual_limit_mode: true
+    dual_limit_retry_initial_delay: 5
+    dual_limit_retry_max_delay: 60
+    dual_limit_retry_backoff_factor: 2.0
+    slippage_protection:
+      enabled: true
+      max_slippage: 0.001
+  risk_control:
+    max_order_size: 1.0
+    min_order_size: 0.001
+    price_change_check:
+      enabled: true
+      max_price_change: 0.01
+risk_control:
+  position_management:
+    max_single_token_position: 10.0
+    max_total_position: 30.0
+  balance_management:
+    min_balance_warning: 50.0
+    min_balance_close_position: 40.0
+    check_interval: 60
+  network_failure:
+    enabled: true
+    reconnect_interval: 30
+    max_reconnect_attempts: 100000000
+    auto_resume: true
+  exchange_maintenance:
+    enabled: true
+    check_interval: 60
+    maintenance_error_codes:
+    - 503
+    - 502
+    auto_resume: true
+  price_anomaly:
+    enabled: true
+    max_price_change_rate: 0.05
+    check_window: 5
+  order_anomaly:
+    enabled: true
+    max_order_wait_time: 300
+    auto_cancel_timeout: true
+  funding_rate_anomaly:
+    enabled: true
+    max_funding_rate_change: 0.3
+  position_duration:
+    enabled: true
+    max_position_duration: 24
+    auto_close_on_timeout: true
+  single_trade_risk:
+    enabled: true
+    max_single_trade_loss: 1000.0
+  daily_trade_limit:
+    enabled: true
+    max_daily_trades: 100
+  symbol_risk:
+    disabled_symbols: []
+    high_risk_symbols: []
+  data_consistency:
+    enabled: true
+    check_interval: 300
+    auto_fix: true

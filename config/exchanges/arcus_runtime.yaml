@@ -1,0 +1,6 @@
+# Public settings only; API identity/signing seed comes from the root .env in legacy live mode.
+name: Arcus
+testnet: false
+api:
+  base_url: https://api.arcus.xyz
+  ws_url: wss://api.arcus.xyz/v1/ws
