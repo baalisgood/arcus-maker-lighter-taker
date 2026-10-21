@@ -187,3 +187,19 @@ def test_redrain_later_retries_symbol_under_lock(tmp_path):
         await asyncio.sleep(.05)
         assert calls==[SYMBOL] and not e.halted
     asyncio.run(run())
+
+
+def test_zero_size_rejection_row_side_is_not_evidence_for_filled_sell(tmp_path):
+    # amlt-5937: SELL close filled 0.192, then a zero-value REJECTED row (side BUY default) halted the runner.
+    from decimal import Decimal
+    from test_arcus_adapter import adapter, row
+    from test_maker_taker_engine import maker
+    e=engine(tmp_path);client=maker(e,qty='1',side=-1)
+    e.journal.observe_maker(client,Decimal(1),'filled','EX-S')
+    a=adapter();live=object.__new__(LiveTransport);live.identity='fake'
+    order=a._merge_order(row(order_id='EX-S',status='REJECTED',clientId=client,side='BUY',originalSize='0',remainingSize='0'))
+    obs=live.normalize(order,'arcus')
+    assert obs.side is None and obs.requested is None
+    adopted=e._adopt_ledger_identity(obs)
+    assert adopted.side==-1
+    e._validate(adopted,e.journal.maker(client),'arcus')

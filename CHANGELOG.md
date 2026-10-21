@@ -1,5 +1,12 @@
 # Change list
 
+## v14 — Root cause of the side-mismatch halts: Arcus cancel-rejection pushes
+
+- Evidence (`tools/inspect_arcus_order.py`, amlt-5937 / c556322b1878438d): Arcus REST and fills report the order as SELL, FILLED, MAKER 0.192; the ledger (-1) was right. The halting observation had `status: rejected` right after the cancel of that order: canceling an order that had just filled makes Arcus push a zero-value row (originalSize 0, marketId 0, side defaulting to BUY, REJECTED). Same shape as v8's amlt-1733. It halted only sell orders because the default side is BUY.
+- Arcus orders channel: a REJECTED row with originalSize <= 0 is a request rejection, never merged into the order. If the cached order is not terminal, its real state is re-read from REST; a terminal cached order is left unchanged.
+- normalize: zero-size rows no longer provide side evidence either (side inherits from the ledger like size), as a fallback for uncached orders. Ledger side check is unchanged for real rows.
+- Tests: `test_cancel_rejection_push_never_changes_filled_order`, `test_cancel_rejection_push_on_open_order_recovers_from_rest_instead_of_merging`, `test_zero_size_rejection_row_side_is_not_evidence_for_filled_sell`.
+
 ## v13 — Evidence for the repeated Arcus side mismatch (no safety check relaxed)
 
 - 16:28 BTC halt (amlt-5943, order 758ba5934fc942cc) happened on v12, so the fill-row merge was not the only source. All remaining side sources are Arcus order rows (WS `orders` channel or REST `/v1/order`).

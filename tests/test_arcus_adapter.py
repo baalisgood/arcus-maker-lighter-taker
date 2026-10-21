@@ -780,3 +780,37 @@ def test_side_change_is_recorded_as_diagnostic_without_changing_validation():
         await ws.handle_message(frame('orders',{'orders':[row(side='BUY',seq=3)]},type='channel_data'))
         assert '_side_change' not in a._orders['O1'].raw_data
     run(scenario())
+
+
+def _rejection_push(order_id='O1'):
+    # Shape seen live after canceling an order that had just filled.
+    return {'orderId':order_id,'clientId':'Client-A','marketId':0,'marketDisplayName':'','side':'BUY','type':'LIMIT',
+            'price':'0','originalSize':'0','remainingSize':'0','status':'REJECTED','sequenceNumber':0}
+
+
+def test_cancel_rejection_push_never_changes_filled_order():
+    a=adapter(); ws=a._websocket; recovered=[]
+    ws._recover_order=lambda *args,**kw:recovered.append(args)
+    seen=[]; ws._quantity_callbacks.append(seen.append)
+    async def scenario():
+        await ws.handle_message(frame('orders',{'orders':[row(side='SELL',status='FILLED',filled='1',seq=5)]}))
+        seen.clear()
+        await ws.handle_message(frame('orders',_rejection_push(),type='channel_data'))
+        o=a._orders['O1']
+        assert o.side==OrderSide.SELL and o.status==OrderStatus.FILLED and o.filled==1
+        assert seen==[] and recovered==[]
+    run(scenario())
+
+
+def test_cancel_rejection_push_on_open_order_recovers_from_rest_instead_of_merging():
+    a=adapter(); ws=a._websocket; recovered=[]
+    ws._recover_order=lambda *args,**kw:recovered.append(args)
+    async def scenario():
+        await ws.handle_message(frame('orders',{'orders':[row(side='SELL',seq=5)]}))
+        await ws.handle_message(frame('orders',_rejection_push(),type='channel_data'))
+        o=a._orders['O1']
+        assert o.side==OrderSide.SELL and o.status==OrderStatus.OPEN
+        assert recovered and recovered[0][0]=='O1'
+        await ws.handle_message(frame('orders',_rejection_push('UNKNOWN'),type='channel_data'))
+        assert 'UNKNOWN' not in a._orders and recovered[-1][0]=='UNKNOWN'
+    run(scenario())

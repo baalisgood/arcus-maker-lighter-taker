@@ -207,6 +207,16 @@ class ArcusWebSocket:
             if inspect.isawaitable(result):
                 await result
 
+    @staticmethod
+    def _is_request_rejection(row):
+        if not isinstance(row,dict):return False
+        if str(row.get('status',row.get('state',''))).upper()!='REJECTED':return False
+        try:
+            from decimal import Decimal
+            return Decimal(str(row.get('originalSize','0')))<=0
+        except Exception:
+            return True
+
     def _scoped_row(self, row, message):
         # An envelope authorizes the scope only after BOTH address and index match.
         return {'address': message['id'], 'accountIndex':message['accountIndex'], **row}
@@ -245,6 +255,19 @@ class ArcusWebSocket:
             if 'orderId' in data:
                 rows.append(data)
             for row in rows:
+                if self._is_request_rejection(row):
+                    # Seen live (amlt-1733, amlt-5937, amlt-5943): rejecting a cancel of an order that had just
+                    # filled pushes a zero-value row (originalSize 0, marketId 0, side BUY default, REJECTED).
+                    # It describes the rejected request, not the order: never merge it. The order's real state
+                    # comes from REST unless the cached order is already terminal.
+                    order_id=str(row.get('orderId') or '')
+                    cached=self.adapter._orders.get(order_id)
+                    self.adapter.logger.warning(f'Arcus request-rejection push ignored for order {order_id} '
+                                                f'(cached={cached.status.value if cached else None})')
+                    if order_id and (cached is None or cached.status not in (OrderStatus.FILLED,OrderStatus.CANCELED,OrderStatus.REJECTED,OrderStatus.EXPIRED)):
+                        self._recover_order(order_id,cached.symbol if cached else '',
+                                            startup_snapshot=message.get('type')=='subscribed')
+                    continue
                 order=self.adapter._merge_order(self._scoped_row(row,message))
                 if order:
                     self._quantity(order,startup_snapshot=message.get('type')=='subscribed')

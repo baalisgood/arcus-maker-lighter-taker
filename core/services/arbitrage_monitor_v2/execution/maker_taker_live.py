@@ -135,7 +135,9 @@ class LiveTransport:
             if not any(k in raw for k in ('originalSize','quantity')):requested=cumulative=None
             # Seen live: REJECTED pushes with originalSize 0 (cumulative derived as 0.13). A zero/negative size is not
             # quantity evidence; the row then becomes status-only and inherits size/filled from the ledger.
-            elif requested is not None and requested<=0:requested=cumulative=None
+            elif requested is not None and requested<=0:
+                # Zero-value rows also carry a default side (BUY); side is not evidence either.
+                requested=cumulative=side=None
         return OrderObservation(venue,self.identity,symbol or order.symbol,str(client or order.client_id or ''),str(order.id),
             side,requested,cumulative,status,'validated_adapter',time.monotonic(),
             sequence=str(raw.get('sequenceNumber','')),average=order.average,fee=fee,
