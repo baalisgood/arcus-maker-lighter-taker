@@ -1245,6 +1245,9 @@ class MakerTakerEngine:
                 if initial and not self.journal.has_history(symbol) and any(actual):
                     failure_reason='Unowned pre-existing position; dedicated account required';raise ValueError(failure_reason)
                 if initial and actual!=expected:
+                    try:self.journal.event(symbol,'startup_position_mismatch',actual_arcus=str(actual[0]),actual_lighter=str(actual[1]),
+                        ledger_arcus=str(expected[0]),ledger_lighter=str(expected[1]))
+                    except Exception:pass
                     failure_reason='Startup positions do not exactly match ledger';raise ValueError(failure_reason)
                 if drift:
                     if self.journal.obligations(symbol):

@@ -74,6 +74,9 @@ async def main(argv=None):
     p.add_argument('--env-file', type=Path)
     p.add_argument('--min-age-seconds', type=float, default=120)
     p.add_argument('--confirm', action='store_true', help='write the inferred resolution into live.sqlite')
+    p.add_argument('--accept-flat', action='store_true',
+                   help='a hedged ledger pair (net 0) whose positions were closed outside the runner (both venues flat) '
+                        'is reset to flat; requires --confirm to write')
     args = p.parse_args(argv)
 
     from run_maker_taker import ProcessLock, account_lock_paths, load_live_env
@@ -133,6 +136,27 @@ async def main(argv=None):
                     entry['unresolved_attempts'].append(info)
                 if not active:
                     entry['action'] = 'none'
+                    if actual != ledger:
+                        entry['action'] = 'mismatch'
+                        try:
+                            if any(actual):
+                                raise ValueError('Positions are not flat; only an externally closed (flat) pair can be accepted')
+                            if ledger[0] + ledger[1] != 0:
+                                raise ValueError('Ledger is not a hedged pair (net != 0); refusing to accept flat')
+                            if journal.obligations(symbol) or journal.makers(symbol, active=True):
+                                raise ValueError('Pending hedge obligation or active maker in ledger')
+                            if not args.accept_flat:
+                                entry['action'] = 'mismatch (externally closed pair: rerun with --accept-flat --confirm to reset ledger to flat)'
+                            elif not args.confirm:
+                                entry['action'] = 'dry_run accept_flat (add --confirm to write)'
+                            else:
+                                mark = D(str(source.markets[symbol][0]['markPrice']))
+                                journal.reconcile_inventory(symbol, D(0), D(0), mark)
+                                journal.event(symbol, 'operator_accept_flat', ledger=entry['ledger'], actual=entry['actual'],
+                                              evidence='account_positions')
+                                entry['action'] = 'written (ledger reset to flat)'
+                        except ValueError as exc:
+                            entry['action'] = 'refused'; entry['reason'] = str(exc)
                     continue
                 try:
                     if len(active) != 1 or active[0]['venue'] != 'lighter':

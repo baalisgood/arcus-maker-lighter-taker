@@ -1,5 +1,10 @@
 # Change list
 
+## Externally closed positions
+
+- `tools/operator_resolve_hedge.py --accept-flat --confirm` resets a hedged ledger pair (net 0, no pending obligation/maker) to flat when both venues are verifiably flat (positions closed manually); dry run by default.
+- Startup position mismatches record a `startup_position_mismatch` event with per-venue actual/ledger values.
+
 ## Reused clientId from historical orders; Lighter trades sort
 
 - Fix startup halt `symbol: observed='BTC-USDC-PERP' ledger='HYPE-USDC-PERP'`: an Arcus history order reusing the ledger's `amlt-N` clientId (older/reset ledger on the same account) was matched by clientId alone. A clientId match is now ours only if the exchange order id agrees or is not yet known; otherwise the order is handled as foreign and a `client_id_reused_by_foreign_order` event is recorded. Maker pushes resolve the ledger row by exchange order id first.

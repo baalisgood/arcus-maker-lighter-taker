@@ -375,3 +375,20 @@ def test_startup_race_cancellation_drains_new_identity_arriving_while_cancel_awa
         assert not e.transport.sends and not e.transport.emergencies
         assert [call.args[0] for call in live.arcus.cancel_known_order.await_args_list]==['O1','O2']
     asyncio.run(scenario())
+
+
+def test_operator_accept_flat_reset_lets_startup_pass_after_manual_close(tmp_path):
+    # Live HYPE: hedged pair closed manually on both venues; ledger reset to flat must pass startup exactly once.
+    async def scenario():
+        e=engine(tmp_path);client=maker(e,qty='.1')
+        await e.observe_maker(replace(bridge().normalize(
+            adapter()._merge_order(row(status='FILLED',filled='.1',originalSize='.1',remainingSize='0')),'arcus'),
+            symbol=SYMBOL,client=client,account='fake'))
+        await e.drain_symbol(SYMBOL)
+        a,l=e.journal.inventory(SYMBOL);assert a and a+l==0 and not e.journal.obligations(SYMBOL)
+        e.transport.sends.clear();e.transport.positions={SYMBOL:[D(0),D(0)]}
+        e.journal.reconcile_inventory(SYMBOL,D(0),D(0),D(100))
+        assert e.journal.inventory(SYMBOL)==(D(0),D(0)) and not e.journal.obligations(SYMBOL)
+        assert await e.reconcile(initial=True) is not False and not e.halt_reason
+        assert not e.journal.pending_reconcile(SYMBOL) and not e.transport.sends
+    asyncio.run(scenario())
