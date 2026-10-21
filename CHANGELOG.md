@@ -1,5 +1,11 @@
 # Change list
 
+## v13 — Evidence for the repeated Arcus side mismatch (no safety check relaxed)
+
+- 16:28 BTC halt (amlt-5943, order 758ba5934fc942cc) happened on v12, so the fill-row merge was not the only source. All remaining side sources are Arcus order rows (WS `orders` channel or REST `/v1/order`).
+- Diagnostic: when a cached Arcus order receives a row whose side differs, the adapter logs a warning and the runner journals `arcus_side_change` (previous/reported side, sequence numbers, status, whether it was a trade row, row field names). The ledger side check still halts as before.
+- New read-only tool `tools/inspect_arcus_order.py`: for the last observation_mismatch orders (or `--order <id>`), prints the ledger row, related events, Arcus `GET /v1/order/<id>` and that order's `/v1/fills` (side/size/status fields only). Writes nothing, sends no orders.
+
 ## v12 — Arcus fill rows no longer overwrite order side
 
 - Root cause of the 14:18 SOL halt (`observation_mismatch side: observed=1 ledger=-1`): when a `userFills` row arrived with a newer sequence than the cached order, it was merged over the order and its `side` (trade side, not order side) replaced the order's side.

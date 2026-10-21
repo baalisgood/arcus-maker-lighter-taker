@@ -296,6 +296,16 @@ class ArcusAdapter(ExchangeAdapter):
             if old_time is not None and new_time is not None and int(new_time) < int(old_time):
                 return previous
         merged = {**(previous.raw_data if previous else {}), **row}
+        merged.pop('_side_change', None)
+        reported_side = row.get('side', row.get('orderSide'))
+        if previous and reported_side is not None and str(reported_side).lower() != previous.side.value:
+            # Diagnostic only: which row changed a cached order's side (field names, never values beyond side/seq).
+            merged['_side_change'] = {'previous': previous.side.value, 'reported': str(reported_side).lower(),
+                                      'sequence': row.get('sequenceNumber'), 'previous_sequence': previous.raw_data.get('sequenceNumber'),
+                                      'status': row.get('status', row.get('state')), 'trade_row': 'tradeId' in row,
+                                      'fields': sorted(k for k in row if not str(k).startswith('_'))[:40]}
+            self.logger.warning(f"Arcus order {order_id} side changed {previous.side.value}->{str(reported_side).lower()} "
+                                f"seq={row.get('sequenceNumber')} prev_seq={previous.raw_data.get('sequenceNumber')}")
         # Event-local evidence must survive quantity clamping without inheriting older proof.
         merged['_reported_order'] = {key: row.get(key) for key in
                                      ('status', 'state', 'cancelReason', 'originalSize', 'remainingSize')}

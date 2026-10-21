@@ -766,3 +766,17 @@ def test_fill_row_side_never_overrides_order_side():
         o=a._orders['O1']
         assert o.filled==D('.4') and o.side==OrderSide.SELL and o.raw_data['side']=='SELL'
     run(scenario())
+
+
+def test_side_change_is_recorded_as_diagnostic_without_changing_validation():
+    a=adapter(); ws=a._websocket
+    async def scenario():
+        await ws.handle_message(frame('orders',{'orders':[row(side='SELL',seq=1)]}))
+        await ws.handle_message(frame('orders',{'orders':[row(side='BUY',seq=2)]},type='channel_data'))
+        o=a._orders['O1']
+        assert o.side==OrderSide.BUY  # still reported as-is; the ledger check decides
+        change=o.raw_data['_side_change']
+        assert change['previous']=='sell' and change['reported']=='buy' and change['sequence']==2 and change['trade_row'] is False
+        await ws.handle_message(frame('orders',{'orders':[row(side='BUY',seq=3)]},type='channel_data'))
+        assert '_side_change' not in a._orders['O1'].raw_data
+    run(scenario())

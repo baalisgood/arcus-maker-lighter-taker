@@ -125,6 +125,10 @@ class LiveTransport:
                 pass
         side=1 if order.side==OrderSide.BUY else -1
         requested=D(order.amount);cumulative=D(order.filled)
+        if venue=='arcus' and isinstance(raw.get('_side_change'),dict):
+            try:self.journal.event(symbol or order.symbol or '*','arcus_side_change',order_id=str(order.id),
+                                   client=str(client or order.client_id or ''),**{k:v for k,v in raw['_side_change'].items()})
+            except Exception:pass
         if venue=='arcus' and raw:
             # A partial push for an order no longer cached omits side/size; the adapter's BUY/0 defaults are not evidence.
             if not any(k in raw for k in ('side','orderSide')):side=None
