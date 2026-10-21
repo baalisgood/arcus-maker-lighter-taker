@@ -841,3 +841,37 @@ def test_cancel_without_rejection_still_fails_closed_after_reconcile_timeout():
         with pytest.raises(OrderStateUnknownError):
             await a._await_order('O1',SYMBOL,terminal=True)
     run(scenario())
+
+
+def _acked(a, side=OrderSide.SELL, order_id='O1'):
+    body={'address':ADDRESS,'accountIndex':0,'marketId':1,'orderSide':side.value.upper(),'orderType':'LIMIT',
+          'price':'50000','originalSize':'1','clientId':'Client-A'}
+    a._clients['Client-A']=order_id
+    a._orders[order_id]=a._parse_order({**body,'orderId':order_id,'status':'ACK','marketDisplayName':'BTC-USD'})
+
+
+def test_zero_value_rejection_of_new_order_is_terminal_rejected_with_sent_side():
+    # amlt-9307: placement rejected; Arcus pushes the zero-value row and REST cannot find the order later.
+    a=adapter(); ws=a._websocket; seen=[]; ws._quantity_callbacks.append(seen.append)
+    ws._recover_order=lambda *args,**kw:(_ for _ in ()).throw(AssertionError('must not wait on REST'))
+    _acked(a)
+    async def scenario():
+        await ws.handle_message(frame('orders',{'orders':[]}))
+        await ws.handle_message(frame('orders',_rejection_push(),type='channel_data'))
+        o=a._orders['O1']
+        assert o.status==OrderStatus.REJECTED and o.side==OrderSide.SELL and o.amount==1 and o.filled==0
+        assert seen and seen[-1].status==OrderStatus.REJECTED
+        got=await a._await_order('O1',SYMBOL,terminal=True)
+        assert got.status==OrderStatus.REJECTED
+    run(scenario())
+
+
+def test_zero_value_rejection_after_cancel_sent_is_not_a_placement_rejection():
+    a=adapter(); ws=a._websocket; recovered=[]
+    ws._recover_order=lambda *args,**kw:recovered.append(args)
+    _acked(a); a._cancel_uncertain.add('O1')
+    async def scenario():
+        await ws.handle_message(frame('orders',{'orders':[]}))
+        await ws.handle_message(frame('orders',_rejection_push(),type='channel_data'))
+        assert a._orders['O1'].status!=OrderStatus.REJECTED and recovered
+    run(scenario())

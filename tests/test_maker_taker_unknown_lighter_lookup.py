@@ -203,3 +203,20 @@ def test_zero_size_rejection_row_side_is_not_evidence_for_filled_sell(tmp_path):
     adopted=e._adopt_ledger_identity(obs)
     assert adopted.side==-1
     e._validate(adopted,e.journal.maker(client),'arcus')
+
+
+def test_rejected_new_sell_maker_observation_matches_ledger(tmp_path):
+    from test_arcus_adapter import adapter, frame, _acked, _rejection_push
+    from test_maker_taker_engine import maker
+    from core.adapters.exchanges.models import OrderSide
+    e=engine(tmp_path);client=maker(e,qty='1',side=-1)
+    a=adapter();live=object.__new__(LiveTransport);live.identity='fake'
+    _acked(a,OrderSide.SELL)
+    async def push():
+        await a._websocket.handle_message(frame('orders',{'orders':[]}))
+        await a._websocket.handle_message(frame('orders',_rejection_push(),type='channel_data'))
+    asyncio.run(push())
+    obs=live.normalize(a._orders['O1'],'arcus',SYMBOL,client)
+    assert obs.side==-1 and obs.status=='rejected' and str(obs.cumulative)=='0' and str(obs.requested)=='1'
+    e.journal.observe_maker(client,__import__('decimal').Decimal(0),'open','O1')
+    e._validate(obs,e.journal.maker(client),'arcus')

@@ -1,5 +1,11 @@
 # Change list
 
+## v16 — Zero-value REJECTED push also means "new order rejected" (real cause of the 17:34 halt)
+
+- Evidence (`inspect_arcus_order.py --order amlt-9307`): ETH open BUY maker, prepared 0.2s before the halt; ledger canceled/0; Arcus `GET /v1/order/0659721a80594055` is rejected (order not queryable) and there are no fills. So Arcus rejected the NEW order and announced it with the same zero-value REJECTED row used for rejected cancels. v14 ignored that row; REST cannot return a rejected order, so the order stayed unknown and the pause-cancel halted (`CRITICAL cancellation unresolved`). v15's longer wait would not have helped.
+- Rule now: a zero-value REJECTED row for an order we only have the placeOrder ACK for (no WS/REST state yet, nothing filled, no cancel sent) is terminal REJECTED with 0 fill, keeping the side/size/market we sent. For orders already seen open/filled, or after a cancel was sent, it stays a request rejection (v14/v15 behavior).
+- Tests: `test_zero_value_rejection_of_new_order_is_terminal_rejected_with_sent_side`, `test_zero_value_rejection_after_cancel_sent_is_not_a_placement_rejection`, `test_rejected_new_sell_maker_observation_matches_ledger`.
+
 ## v15 — Fix v14 regression: cancel gave up 1s after a rejected cancel
 
 - 17:34 ETH halt `CRITICAL cancellation unresolved: amlt-9307: OrderStateUnknownError`. Before v14 the zero-value REJECTED push (cancel rejected) wrongly made the cached order terminal at once, so the cancel returned. v14 correctly ignores that push, but the cancel then only waited `reconcile_timeout` (1s) for the real FILLED/CANCELED state, which can take longer to show on WS/REST.

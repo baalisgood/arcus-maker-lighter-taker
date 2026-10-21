@@ -262,6 +262,22 @@ class ArcusWebSocket:
                     # comes from REST unless the cached order is already terminal.
                     order_id=str(row.get('orderId') or '')
                     cached=self.adapter._orders.get(order_id)
+                    if (cached is not None and cached.raw_data.get('status')=='ACK' and 'state' not in cached.raw_data
+                            and cached.filled==0 and order_id not in self.adapter._cancel_uncertain):
+                        # Seen live (amlt-9307): the same zero-value REJECTED row is how Arcus rejects a NEW order
+                        # (only placeOrder ACK seen, no cancel sent, nothing filled). A rejected order is not
+                        # queryable on REST afterwards, so this row is the terminal evidence: REJECTED, 0 filled,
+                        # keeping the side/size/market we sent.
+                        sent={k:v for k,v in cached.raw_data.items() if not str(k).startswith('_')}
+                        sent.update(status='REJECTED',originalSize=str(cached.amount),remainingSize=str(cached.amount),
+                                    filledSize='0',sequenceNumber=row.get('sequenceNumber',sent.get('sequenceNumber')))
+                        sent.pop('state',None)
+                        self.adapter.logger.warning(f'Arcus placement rejected for order {order_id}')
+                        order=self.adapter._merge_order(self._scoped_row(sent,message))
+                        if order:
+                            self._quantity(order,startup_snapshot=message.get('type')=='subscribed')
+                            await self._emit(('orders',None),order)
+                        continue
                     self.adapter.logger.warning(f'Arcus request-rejection push ignored for order {order_id} '
                                                 f'(cached={cached.status.value if cached else None})')
                     if order_id:
