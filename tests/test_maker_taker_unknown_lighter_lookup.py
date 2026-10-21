@@ -55,3 +55,19 @@ def test_arcus_zero_size_rejected_push_is_status_only_and_inherits_ledger(tmp_pa
     assert obs.requested is None and obs.cumulative is None and obs.status=='rejected'
     adopted=e._adopt_ledger_identity(obs)
     assert str(adopted.requested)=='1' and str(adopted.cumulative)=='0'
+
+
+def test_cancel_result_from_zero_size_terminal_push_adopts_ledger(tmp_path):
+    from decimal import Decimal
+    from test_arcus_adapter import adapter, row
+    from test_maker_taker_engine import maker
+    async def scenario():
+        e=engine(tmp_path);client=maker(e,qty='1',side=1)
+        e.journal.observe_maker(client,Decimal(0),'open','EX-C')
+        a=adapter();live=object.__new__(LiveTransport);live.identity='fake'
+        order=a._merge_order(row(order_id='EX-C',status='CANCELED',clientId=client,originalSize='0',remainingSize='0',
+                                 marketDisplayName='SOL-USD'))
+        obs=live.normalize(order,'arcus',symbol='SOL-USDC-PERP')
+        await e.observe_cancel(dict(e.journal.maker(client)),obs)
+        assert e.journal.maker(client)['status']=='canceled'
+    asyncio.run(scenario())

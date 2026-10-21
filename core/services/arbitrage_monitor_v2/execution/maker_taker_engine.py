@@ -746,6 +746,8 @@ class MakerTakerEngine:
             return False
 
     async def observe_cancel(self, row, observation):
+        # Cancel results may be a cached sparse/zero-size terminal push; same ledger adoption as live pushes.
+        observation=self._adopt_ledger_identity(observation)
         self._validate(observation,row,'arcus')
         if self.block_legacy_fill(row,observation.cumulative,observation.order_id):
             raise ValueError('Legacy fill cannot be adopted')
@@ -1336,6 +1338,7 @@ class MakerTakerEngine:
             # PREPARED after a crash is potentially sent; NEVER resubmit it.
             try:
                 obs = await asyncio.wait_for(self.transport.lookup_maker(row),self.profile.hedge.request_timeout)
+                obs=self._adopt_ledger_identity(obs)
                 self._validate(obs,row,'arcus')
                 if self.block_legacy_fill(row,obs.cumulative,obs.order_id):return False
                 before=self.journal.inventory(row['symbol'])

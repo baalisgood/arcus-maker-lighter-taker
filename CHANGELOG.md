@@ -1,5 +1,8 @@
 # Change list
 
+## Cancel results and startup lookups adopt ledger identity
+- `observe_cancel` and startup maker recovery now apply the same ledger adoption as live pushes before validation. A cancel can return a cached sparse or zero-size terminal Arcus row (no side/size); previously this raised ValueError and halted with `CRITICAL cancellation unresolved` (seen live: amlt-2637).
+
 ## Arcus zero-size REJECTED pushes treated as status-only
 - Seen live (amlt-1733, HYPE): a REJECTED push reported `originalSize` 0 (unresolved market `MARKET-0`), giving requested 0 / cumulative 0.13 and halting with `Fill processing failed`. A zero or negative reported size is no longer quantity evidence: requested/cumulative are dropped and the known order (matched by exchange id) inherits size and filled quantity from the ledger, like other status-only pushes. Position reconciliation still catches any real fill.
 
