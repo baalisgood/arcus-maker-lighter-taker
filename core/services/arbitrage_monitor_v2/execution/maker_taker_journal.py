@@ -120,6 +120,8 @@ class Journal:
         fd = os.open(self.path, os.O_CREAT|os.O_RDWR|os.O_NOFOLLOW|(0 if existed else os.O_EXCL),0o600)
         os.close(fd)
         self._archive_cursor = 0
+        # symbol -> process-monotonic time of the latest committed-or-attempted ledger inventory change
+        self.inventory_changed = {}
         self._archive_zero_cursor = (0.0,'')
         self.boot = uuid.uuid4().hex
         self.modeled = identity.startswith('paper')
@@ -429,6 +431,7 @@ class Journal:
 
     def _inventory_delta(self,symbol,arcus=D(0),lighter=D(0)):
         a,l=self.inventory(symbol)
+        self.inventory_changed[symbol]=time.monotonic()
         self.db.execute('INSERT OR REPLACE INTO current_inventory VALUES(?,?,?)',(symbol,str(a+arcus),str(l+lighter)))
 
     def _check_obligation_identity(self,oid):
@@ -648,6 +651,76 @@ class Journal:
 
     def confirm_reconcile(self,symbol):
         self.db.execute('DELETE FROM meta WHERE key=?',('reconcile:'+symbol,))
+
+    def unsent_reconcile_plan(self,symbol):
+        """Describe the latest pending correction for symbol if it provably sent nothing and nothing changed since.
+
+        Returns the ledger as it was immediately before that reconciliation anchored a snapshot. Raises ValueError
+        when the correction cannot be undone exactly (any attempt, any later fill or ledger change, ambiguity)."""
+        if not self.pending_reconcile(symbol):raise ValueError('No pending reconciliation correction for this symbol')
+        drift=self.db.execute("SELECT id,payload FROM events WHERE kind='reconcile_drift' AND symbol=? ORDER BY id DESC LIMIT 1",
+                              (symbol,)).fetchone()
+        if drift is None:raise ValueError('No reconcile_drift event for the pending correction')
+        payload=json.loads(drift['payload'])
+        snapshot=(D(str(payload['arcus'])),D(str(payload['lighter'])));net=D(str(payload['correction']))
+        if net!=snapshot[0]+snapshot[1]:raise ValueError('reconcile_drift event is inconsistent')
+        later=self.db.execute("SELECT kind FROM events WHERE symbol=? AND id>? AND kind IN "
+                              "('maker_fill','hedge_fill','emergency_fill','reconcile_drift','operator_accept_flat',"
+                              "'operator_hedge_resolution','manual_intervention_late_fill') LIMIT 1",(symbol,drift['id'])).fetchone()
+        if later is not None:raise ValueError(f"Ledger changed after the reconciliation ({later['kind']}); not revertible")
+        if self.inventory(symbol)!=snapshot:raise ValueError('Ledger no longer equals the reconciliation snapshot; not revertible')
+        if self.makers(symbol,active=True) or self.attempts(active=True,symbol=symbol):
+            raise ValueError('Active maker or hedge attempt for this symbol')
+        pending=self.obligations(symbol)
+        corrections=[o for o in pending if o['purpose']=='reconcile']
+        qty=abs(net)
+        if qty:
+            if len(pending)!=1 or len(corrections)!=1:
+                raise ValueError('Expected exactly one pending obligation, the reconciliation correction')
+            obligation=corrections[0]
+            order=self.maker(obligation['maker'])
+            if (order['venue']!='reconcile' or D(order['qty'])!=qty or D(order['filled'])!=qty or D(obligation['qty'])!=qty
+                    or order['side']!=(1 if net>0 else -1) or D(obligation['hedged']) or D(obligation['unwound'])):
+                raise ValueError('Correction obligation does not match the reconcile_drift event')
+            if self.db.execute('SELECT 1 FROM all_attempt_allocations WHERE obligation=? LIMIT 1',(obligation['id'],)).fetchone():
+                raise ValueError('A hedge attempt was prepared for the correction; not revertible')
+            if self.db.execute('SELECT COUNT(*) FROM all_obligations WHERE maker=?',(order['client'],)).fetchone()[0]!=1:
+                raise ValueError('Correction order has unexpected obligations')
+        else:
+            obligation=order=None
+            if corrections:raise ValueError('Unexpected correction obligation for a zero-net reconciliation')
+        adjustment=self.db.execute('SELECT * FROM adjustments WHERE symbol=? ORDER BY id DESC LIMIT 1',(symbol,)).fetchone()
+        if adjustment is None:raise ValueError('No adjustment row for the reconciliation')
+        effect=(D(adjustment['arcus'])+(order['side']*qty if order else D(0)),D(adjustment['lighter']))
+        before=(snapshot[0]-effect[0],snapshot[1]-effect[1])
+        return {'reconcile_event':drift['id'],'snapshot':snapshot,'ledger_before':before,
+                'adjustment':dict(adjustment),'obligation':obligation['id'] if obligation else None,
+                'order':dict(order) if order else None,'obligation_row':dict(obligation) if obligation else None}
+
+    def revert_unsent_reconcile(self,symbol,actual):
+        """Undo a reconciliation anchored on a bad snapshot, only when the account now equals the prior ledger.
+
+        The removed never-sent rows are preserved verbatim in the operator_reconcile_reverted event."""
+        with self.transaction():
+            plan=self.unsent_reconcile_plan(symbol)
+            actual=tuple(D(str(x)) for x in actual)
+            if actual!=plan['ledger_before']:
+                raise ValueError(f"Account {actual} does not equal the pre-reconciliation ledger {plan['ledger_before']}")
+            if plan['obligation'] is not None:
+                self.db.execute('DELETE FROM pending_obligations WHERE id=?',(plan['obligation'],))
+                self.db.execute('DELETE FROM obligations WHERE id=?',(plan['obligation'],))
+                self.db.execute('DELETE FROM orders WHERE client=?',(plan['order']['client'],))
+            self.db.execute('DELETE FROM adjustments WHERE id=?',(plan['adjustment']['id'],))
+            self.db.execute('INSERT OR REPLACE INTO current_inventory VALUES(?,?,?)',
+                            (symbol,str(plan['ledger_before'][0]),str(plan['ledger_before'][1])))
+            self.inventory_changed[symbol]=time.monotonic()
+            self.confirm_reconcile(symbol)
+            self.event(symbol,'operator_reconcile_reverted',reconcile_event=plan['reconcile_event'],
+                       removed_order=plan['order'],removed_obligation=plan['obligation_row'],
+                       removed_adjustment=plan['adjustment'],
+                       snapshot=[str(x) for x in plan['snapshot']],ledger_after=[str(x) for x in plan['ledger_before']],
+                       actual=[str(x) for x in actual],evidence='account_positions')
+        return plan
 
     def unresolved(self):
         return (self.makers(active=True) or self.obligations() or

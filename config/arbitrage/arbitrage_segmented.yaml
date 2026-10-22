@@ -23,6 +23,7 @@ risk:
   max_unhedged_notional: 500
   stale_book_seconds: 5
   reconcile_interval: 30
+  drift_confirm_seconds: 5 # periodic snapshot drift must persist this long (ledger unchanged) before any correction
   allocation_per_venue: 5000
   leverage: 2
   reserve_ratio: 0.02

@@ -101,6 +101,8 @@ class MakerTakerEngine:
         self.close_tail_reasons={}
         self.requotes = defaultdict(deque)
         self.last_reconcile = 0
+        # symbol -> (actual-ledger difference, first seen monotonic) of an unconfirmed periodic snapshot drift
+        self._drift_suspects = {}
         self.sequence = 0
         self.stopping = False
         self._startup_window = True
@@ -895,6 +897,7 @@ class MakerTakerEngine:
             return False
 
     def _admit(self, symbol, side, purpose, qty, price):
+        if symbol in self._drift_suspects:return False
         if self.journal.pending_reconcile() and any(rows[0]['purpose']=='reconcile' for rows in self.blocking_residuals()):return False
         cfg = self.profile.get_config(symbol)
         arcus,lighter = self.journal.inventory(symbol)
@@ -1296,6 +1299,8 @@ class MakerTakerEngine:
                     failure_reason='Invalid account size';raise ValueError(failure_reason)
                 expected = self.journal.inventory(symbol)
                 drift=any(abs(a-e)>self.rules[symbol].step for a,e in zip(actual,expected))
+                if not initial and not self._drift_confirmed(symbol,actual,expected,drift):
+                    continue
                 if self.journal.pending_reconcile(symbol):
                     if drift:failure_reason='Prior correction not confirmed by account snapshot; no repeated correction';raise ValueError(failure_reason)
                     self.journal.confirm_reconcile(symbol)
@@ -1332,6 +1337,9 @@ class MakerTakerEngine:
             if any(snapshot.get('leverage',{}).get(v,1)>2 for v in ('arcus','lighter')):
                 failure_reason='Returned venue leverage exceeds 2 '+self._leverage_detail(snapshot);raise ValueError(failure_reason)
             self.last_reconcile = self.clock()
+            if self._drift_suspects:
+                # Re-read soon after the confirmation window instead of a full reconcile interval.
+                self.last_reconcile-=max(0,self.profile.risk.reconcile_interval-self.profile.risk.drift_confirm_seconds-1)
             if not self.halted:
                 if retire is not None:retire()
                 self.state = 'ACTIVE' if self.data_ready() else 'PAUSED_DATA'
@@ -1340,6 +1348,35 @@ class MakerTakerEngine:
             self.halt('UNKNOWN_ORDER',failure_reason,error_type=type(exc).__name__)
             await self.cancel_all()
             return False
+
+    def _drift_confirmed(self,symbol,actual,expected,drift):
+        """Account REST can lag a just-confirmed private fill; act only on a drift that persists.
+
+        A periodic drift is acted on only when the same actual-ledger difference was already seen at least
+        drift_confirm_seconds earlier and the ledger has not changed for drift_confirm_seconds.
+        """
+        if not drift:
+            prior=self._drift_suspects.pop(symbol,None)
+            if prior is not None:
+                self.journal.event(symbol,'reconcile_drift_cleared',seconds=round(time.monotonic()-prior[1],3),
+                                   arcus=actual[0],lighter=actual[1])
+            return True
+        window=self.profile.risk.drift_confirm_seconds
+        if window<=0:return True
+        now=time.monotonic()
+        difference=tuple(a-e for a,e in zip(actual,expected))
+        changed=self.journal.inventory_changed.get(symbol)
+        settled=changed is None or now-changed>=window
+        prior=self._drift_suspects.get(symbol)
+        if prior is not None and prior[0]==difference and now-prior[1]>=window and settled:
+            self._drift_suspects.pop(symbol,None)
+            return True
+        if prior is None or prior[0]!=difference:
+            self._drift_suspects[symbol]=(difference,now)
+            self.journal.event(symbol,'reconcile_drift_suspect',arcus=actual[0],lighter=actual[1],
+                               ledger_arcus=expected[0],ledger_lighter=expected[1],
+                               ledger_change_age=round(now-changed,3) if changed is not None else None)
+        return False
 
     async def _cancel_startup_foreign(self):
         first_error=None

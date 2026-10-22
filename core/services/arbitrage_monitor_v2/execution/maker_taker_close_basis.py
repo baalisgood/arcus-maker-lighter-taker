@@ -93,6 +93,9 @@ def remove_origin(lots,origin,lo,hi):
 class CloseBasis:
     def __init__(self,journal,symbols):
         self.journal=journal;self.symbols=tuple(symbols);self.cursor=0;self.states={}
+        # Reconciliations an operator proved were anchored on a bad snapshot never reset the projection.
+        self.reverted={json.loads(p)['reconcile_event'] for (p,) in journal.db.execute(
+            "SELECT payload FROM events WHERE kind='operator_reconcile_reverted'")}
         self.diagnostics=CloseDiagnostics(journal)
         self.sync()
 
@@ -102,6 +105,7 @@ class CloseBasis:
         at=float(row['at'])
         if not math.isfinite(at):raise ValueError('Invalid close basis event time')
         kind=row['kind']
+        if kind=='reconcile_drift' and row['id'] in self.reverted:return
         if kind in ('reconcile_drift','close_floor_unattributed'):
             s=empty();states[symbol]=s
             s['arcus']=amount(p['arcus']);s['lighter']=amount(p['lighter'])

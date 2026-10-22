@@ -41,6 +41,8 @@ class MakerRiskConfig:
     max_unhedged_notional: D = D(500)
     stale_book_seconds: float = 2
     reconcile_interval: float = 30
+    # A periodic snapshot drift must persist this long, with no ledger change meanwhile, before any correction.
+    drift_confirm_seconds: float = 5
     allocation_per_venue: D = D(5000)
     leverage: D = D(2)
     reserve_ratio: D = D('.02')
@@ -89,9 +91,12 @@ def load_profile(path):
         'max_unhedged_notional': number(r.get('max_unhedged_notional', 500), 'max_unhedged_notional'),
         'allocation_per_venue': number(r.get('allocation_per_venue', 5000), 'allocation_per_venue'),
         'leverage': number(r.get('leverage', 2), 'leverage'),
-        'reserve_ratio': number(r.get('reserve_ratio', '.02'), 'reserve_ratio', positive=False)})
+        'reserve_ratio': number(r.get('reserve_ratio', '.02'), 'reserve_ratio', positive=False),
+        'drift_confirm_seconds': float(number(r.get('drift_confirm_seconds', 5), 'drift_confirm_seconds', positive=False))})
     if maker.exchange != 'arcus' or maker.post_only is not True or hedge.exchange != 'lighter' or hedge.order_type != 'market':
         raise ValueError('maker_taker requires Arcus PostOnly and Lighter market hedges')
+    if not 0 <= risk.drift_confirm_seconds <= 120:
+        raise ValueError('drift_confirm_seconds must be in [0,120]')
     if not 0 < risk.leverage <= 2 or not 0 <= risk.reserve_ratio < 1:
         raise ValueError('Leverage must be <=2 and reserve_ratio must be in [0,1)')
     for name, value in [('max_order_age', maker.max_order_age), ('stale_book_seconds', risk.stale_book_seconds),

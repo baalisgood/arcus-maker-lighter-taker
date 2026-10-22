@@ -19,8 +19,9 @@ SYMBOL='SOL-USDC-PERP'
 
 
 def profile():
+    # Correction-mechanics tests act on the first drift; drift confirmation has dedicated tests.
     return MakerProfile('maker_taker',MakerConfig(),HedgeConfig(request_timeout=.05),
-                        MakerRiskConfig(),{SYMBOL:MakerSymbolConfig(SYMBOL,D(1),D('.03'),D('-.01'),D('.01'),5)})
+                        MakerRiskConfig(drift_confirm_seconds=0),{SYMBOL:MakerSymbolConfig(SYMBOL,D(1),D('.03'),D('-.01'),D('.01'),5)})
 
 
 def observation(row,qty,status='open',venue='arcus',side=None,account='fake',**kwargs):

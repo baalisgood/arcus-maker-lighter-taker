@@ -1,5 +1,22 @@
 # Change list
 
+## v18 — periodic drift must persist before correction; operator revert of a bad-snapshot correction
+
+Evidence (HYPE 2026-10-22 00:02): Arcus sell 0.13 filled at 06.230, Lighter hedge buy 0.13 confirmed at 06.615
+(ledger -0.13/+0.13). The periodic reconcile at 07.149 read account REST while the Lighter position had not yet
+updated (Lighter 0), anchored the ledger to it and queued a Lighter buy 0.13 correction. The pre-send recheck
+blocked it (EMERGENCY halt); nothing was sent. Account was hedged throughout (-0.13/+0.13).
+
+- Engine: a non-startup snapshot drift is acted on only when the same actual-ledger difference persists for
+  `risk.drift_confirm_seconds` (default 5) and the ledger has not changed for that long. Until then the symbol
+  admits no new makers, a `reconcile_drift_suspect` event is written and the account is re-read soon;
+  `reconcile_drift_cleared` when it matches again. Also covers the pending-correction and dust-obligation paths.
+  Startup position mismatch is unchanged (immediate block).
+- Journal: `unsent_reconcile_plan` / `revert_unsent_reconcile` undo a never-sent correction (no attempt, no later
+  fill or ledger change) only when the account equals the pre-reconciliation ledger; removed rows are kept verbatim in
+  an `operator_reconcile_reverted` event. Close basis ignores reverted `reconcile_drift` events.
+- Tool: `operator_resolve_hedge.py --revert-unsent-reconcile [--confirm]` (journal backed up first).
+
 ## v17 — Cancel no longer races an in-flight placement (cause of the 17:34 and 18:03 halts)
 
 - Evidence (`inspect_arcus_order.py`): amlt-10493 (SOL open SELL) and amlt-9307 (ETH open BUY) were both canceled ~0.2s after `maker_prepared`, while their placeOrder call was still in flight. amlt-10493 had no exchange id yet; Arcus then rejected the placement (ledger `rejected`, no fills, nothing on Arcus). The cancel (opposite-side cancel after a fill, or pause cancel) looked up an order that did not exist yet and halted with `CRITICAL cancellation unresolved: OrderStateUnknownError`. This cancel path exists since the initial release; it is a timing race, not an Arcus data problem.

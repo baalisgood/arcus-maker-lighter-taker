@@ -11,6 +11,10 @@ journal ONLY when live account positions prove its fill amount unambiguously:
 * the Arcus position equals the ledger exactly, and the Lighter position differs from the ledger by
   0..remaining of the attempt in the hedge direction, aligned to the size step.
 
+--revert-unsent-reconcile undoes a pending reconciliation correction that was anchored on a bad (lagging)
+account snapshot: only when the correction never sent anything, nothing changed since, and the live account
+equals the ledger as it was just before that reconciliation. The journal is backed up first.
+
 The inferred cumulative fill is recorded via the normal journal path (status canceled/filled) together
 with an `operator_hedge_resolution` event. Any remaining uncovered quantity is hedged again by the
 normal engine recovery on the next start. Nothing is ever sent to an exchange by this tool.
@@ -18,6 +22,8 @@ normal engine recovery on the next start. Nothing is ever sent to an exchange by
 import argparse
 import asyncio
 import json
+import os
+import sqlite3
 import sys
 import time
 from contextlib import ExitStack
@@ -56,6 +62,18 @@ def infer_resolution(attempt, obligation, ledger, actual, step):
     return cumulative, ('filled' if cumulative == qty else 'canceled')
 
 
+def backup_journal(journal, state_dir):
+    path = Path(state_dir) / time.strftime('live.sqlite.bak-%Y%m%d-%H%M%S')
+    fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
+    os.close(fd)
+    target = sqlite3.connect(str(path))
+    try:
+        journal.db.backup(target)
+    finally:
+        target.close()
+    return str(path)
+
+
 def attempt_age_seconds(journal, client):
     for at, payload in journal.db.execute("SELECT at,payload FROM events WHERE kind='attempt_prepared' AND payload LIKE ? "
                                           "ORDER BY id DESC", ('%' + str(client) + '%',)):
@@ -80,6 +98,9 @@ async def main(argv=None):
     p.add_argument('--release-retry-exhausted', action='store_true',
                    help='release a retry_exhausted manual-intervention latch so the runner re-hedges the residual; '
                         'requires every symbol ledger == actual, no active attempts/makers; requires --confirm to write')
+    p.add_argument('--revert-unsent-reconcile', action='store_true',
+                   help='undo a never-sent reconciliation correction anchored on a bad snapshot, when the account '
+                        'equals the pre-reconciliation ledger; journal is backed up first; requires --confirm to write')
     args = p.parse_args(argv)
 
     from run_maker_taker import ProcessLock, account_lock_paths, load_live_env
@@ -137,6 +158,30 @@ async def main(argv=None):
                         except Exception as exc:
                             info['tx'] = {'lookup_error': type(exc).__name__, 'detail': str(exc)[:300]}
                     entry['unresolved_attempts'].append(info)
+                if journal.pending_reconcile(symbol):
+                    try:
+                        plan = journal.unsent_reconcile_plan(symbol)
+                        entry['pending_reconcile'] = {'reconcile_event': plan['reconcile_event'],
+                                                      'snapshot': [str(x) for x in plan['snapshot']],
+                                                      'ledger_before': [str(x) for x in plan['ledger_before']],
+                                                      'obligation': plan['obligation']}
+                        if tuple(actual) != plan['ledger_before']:
+                            raise ValueError('Account does not equal the pre-reconciliation ledger; not a bad-snapshot correction')
+                        if await rest.get_open_orders(transport.lighter._normalize_symbol(symbol)):
+                            raise ValueError('Open Lighter order(s) in this market; cancel them first')
+                        if not args.revert_unsent_reconcile:
+                            entry['action'] = ('pending correction was anchored on a bad snapshot: rerun with '
+                                               '--revert-unsent-reconcile --confirm to restore the prior ledger')
+                        elif not args.confirm:
+                            entry['action'] = 'dry_run revert_unsent_reconcile (add --confirm to write)'
+                        else:
+                            entry['backup'] = backup_journal(journal, args.state_dir)
+                            journal.revert_unsent_reconcile(symbol, actual)
+                            entry['ledger'] = [str(x) for x in journal.inventory(symbol)]
+                            entry['action'] = 'written (correction reverted; ledger restored)'
+                    except ValueError as exc:
+                        entry['action'] = 'refused'; entry['reason'] = str(exc)
+                    continue
                 if not active:
                     entry['action'] = 'none'
                     if actual != ledger:
